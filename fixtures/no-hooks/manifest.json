@@ -1,0 +1,6 @@
+{
+  "runtime": "trusted-native-canvas-v1",
+  "name": "No hooks smoke",
+  "version": "1.0.0",
+  "entry": "dist/index.html"
+}

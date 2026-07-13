@@ -26,6 +26,12 @@ jobs:
       - name: Build and package the native fixture
         shell: pwsh
         run: |
+          & .github/scripts/build-native-hooks.ps1 `
+            -RepositoryRoot fixtures/no-hooks `
+            -OutputRoot "$env:RUNNER_TEMP/native/no-hooks"
+          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/native/no-hooks/.empty" -PathType Leaf)) {
+            throw 'A manifest without hooks did not produce the empty marker'
+          }
           node .github/scripts/build-native-companions.mjs `
             --repository-root fixtures/native-hook `
             --output-root "$env:RUNNER_TEMP/native/companion"

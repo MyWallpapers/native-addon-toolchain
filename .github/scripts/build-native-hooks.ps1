@@ -210,7 +210,11 @@ $ManifestFile = Resolve-RepositoryFile $ManifestPath "manifest"
 $ManifestBytes = [IO.File]::ReadAllBytes($ManifestFile)
 $ManifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ManifestFile).Hash
 $Manifest = [Text.Encoding]::UTF8.GetString($ManifestBytes) | ConvertFrom-Json
-$Hooks = @($Manifest.native.hooks)
+$Hooks = if ($null -eq $Manifest.native -or $null -eq $Manifest.native.hooks) {
+  @()
+} else {
+  @($Manifest.native.hooks)
+}
 Remove-Item -LiteralPath $OutputRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 if ($Hooks.Count -eq 0) {
