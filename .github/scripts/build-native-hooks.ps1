@@ -278,6 +278,16 @@ foreach ($Hook in $Hooks) {
     throw "Hook $HookId contains a targeting or compiler directive; MyWallpaper derives these from its surface"
   }
 
+  $IdentityDirectory = Join-Path $OutputRoot ".generated"
+  New-Item -ItemType Directory -Path $IdentityDirectory -Force | Out-Null
+  $IdentityHeader = Join-Path $IdentityDirectory "$HookId-identity.hpp"
+  @(
+    "#define WH_MOD 1",
+    "#define WH_MOD_ID L`"$(Escape-CDefine $HookId)`"",
+    "#define WH_MOD_VERSION L`"$(Escape-CDefine ([string]$Manifest.version))`"",
+    "#define MYWALLPAPER_SURFACE_WINDOWS_SHELL_V1 1"
+  ) | Set-Content -LiteralPath $IdentityHeader -Encoding ASCII
+
   foreach ($TargetName in $Architectures.Keys) {
     $Architecture = $Architectures[$TargetName]
     $TargetOutput = Join-Path $OutputRoot "native/out/hooks/$HookId/$TargetName"
@@ -299,13 +309,11 @@ foreach ($Hook in $Hooks) {
       "-std=c++23", "-O2", "-shared", "-static-libstdc++", "-static-libgcc",
       "-DUNICODE", "-D_UNICODE", "-DWINVER=0x0A00", "-D_WIN32_WINNT=0x0A00",
       "-D_WIN32_IE=0x0A00", "-DNTDDI_VERSION=0x0A000008", "-D__USE_MINGW_ANSI_STDIO=0",
-      "-DWH_MOD", "-DWH_MOD_ID=L\`"$(Escape-CDefine $HookId)\`"",
-      "-DWH_MOD_VERSION=L\`"$(Escape-CDefine ([string]$Manifest.version))\`"",
-      "-DMYWALLPAPER_SURFACE_WINDOWS_SHELL_V1=1",
       "-I", (Join-Path $CompilerRoot "include"),
       "-I", (Join-Path $RepositoryRoot "native/generated"),
       "-I", (Split-Path -Parent $Source),
-      $ImportLibrary, $Source, "-include", "windhawk_api.h", "-target", $Architecture.target,
+      $ImportLibrary, $Source,
+      "-include", $IdentityHeader, "-include", "windhawk_api.h", "-target", $Architecture.target,
       "-lcomctl32", "-lole32", "-loleaut32", "-lruntimeobject",
       "-Wl,--export-all-symbols", "-Wl,--no-insert-timestamp", "-Wl,--build-id=none",
       "-ffile-prefix-map=$RepositoryRoot=.", "-o", $Dll
