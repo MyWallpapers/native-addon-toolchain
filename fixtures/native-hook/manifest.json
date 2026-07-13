@@ -1,0 +1,16 @@
+{
+  "runtime": "trusted-native-canvas-v1",
+  "name": "Native hook build smoke",
+  "version": "0.0.0",
+  "entry": "index.html",
+  "native": {
+    "hooks": [
+      {
+        "id": "build-smoke",
+        "runtime": "windhawk-v1",
+        "source": "native/hooks/build-smoke.wh.cpp",
+        "surface": "windows-shell-v1"
+      }
+    ]
+  }
+}

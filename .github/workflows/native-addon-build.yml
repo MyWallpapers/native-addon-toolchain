@@ -1,0 +1,115 @@
+name: Native add-on build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      archive-name: ${{ steps.package.outputs.archive-name }}
+    steps:
+      - name: Checkout immutable caller commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Checkout trusted MyWallpaper toolchain
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .mywallpaper-ci-toolchain
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .mywallpaper-ci-toolchain/.nvmrc
+
+      - name: Build native outputs without credentials
+        shell: pwsh
+        run: |
+          node "$env:GITHUB_WORKSPACE/.mywallpaper-ci-toolchain/.github/scripts/build-native-companions.mjs" `
+            --repository-root $env:GITHUB_WORKSPACE `
+            --output-root "$env:RUNNER_TEMP/mywallpaper-native/companion"
+          & "$env:GITHUB_WORKSPACE/.mywallpaper-ci-toolchain/.github/scripts/build-native-hooks.ps1" `
+            -RepositoryRoot $env:GITHUB_WORKSPACE `
+            -OutputRoot "$env:RUNNER_TEMP/mywallpaper-native/hooks"
+
+      - name: Create deterministic native package
+        id: package
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "mywallpaper-native-build.zip"
+          & "$env:GITHUB_WORKSPACE/.mywallpaper-ci-toolchain/.github/scripts/package-native-build.ps1" `
+            -CompanionRoot "$env:RUNNER_TEMP/mywallpaper-native/companion" `
+            -HooksRoot "$env:RUNNER_TEMP/mywallpaper-native/hooks" `
+            -OutputArchive $archive
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "archive-name=mywallpaper-native-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
+
+      - name: Transfer immutable archive to isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.package.outputs.archive-name }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Download archive without executing or extracting its contents
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.archive-name }}
+          path: ${{ runner.temp }}/mywallpaper-native-publish
+
+      - name: Locate the single archive
+        id: package
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/mywallpaper-native-publish" -File -Filter *.zip)
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one native build archive, got $($archives.Count)"
+          }
+          "archive=$($archives[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload through GitHub OIDC
+        shell: pwsh
+        env:
+          NATIVE_BUILD_ARCHIVE: ${{ steps.package.outputs.archive }}
+          NATIVE_BUILD_PUBLISH_URL: https://mywallpaper.online/api/native-builds
+        run: |
+          $audience = [uri]::EscapeDataString("mywallpaper-native-publish")
+          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains("?")) { "&" } else { "?" }
+          $tokenResponse = Invoke-RestMethod `
+            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+            -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$separator`audience=$audience"
+          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+            throw "GitHub OIDC token was not returned"
+          }
+          $requestId = "native-build:${env:GITHUB_REPOSITORY_ID}:${env:GITHUB_SHA}:${env:GITHUB_RUN_ID}:${env:GITHUB_RUN_ATTEMPT}"
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri $env:NATIVE_BUILD_PUBLISH_URL `
+            -Headers @{
+              Authorization = "Bearer $($tokenResponse.value)"
+              "X-Request-ID" = $requestId
+            } `
+            -ContentType "application/zip" `
+            -InFile $env:NATIVE_BUILD_ARCHIVE
