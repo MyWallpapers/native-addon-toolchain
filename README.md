@@ -5,10 +5,14 @@ MyWallpaper add-ons from public source repositories. It contains no product
 backend, credential or end-user runtime.
 
 Add-ons call `.github/workflows/native-addon-build.yml` by a full commit SHA.
-The workflow checks out that exact toolchain revision, builds Windows
-companions and product-owned Windhawk hooks without credentials, creates one
-deterministic archive, then transfers only that archive to an isolated OIDC
-publisher job.
+An isolated `verify-web` job checks out the caller and that exact toolchain
+revision, installs the locked pnpm graph, typechecks and rebuilds the web
+bundle, and requires the caller's complete Git working tree to remain clean.
+Only its success result reaches `build`: the native job starts on a fresh
+runner, repeats both immutable checkouts, restores the pinned Node runtime,
+then builds Windows companions and product-owned Windhawk hooks without
+credentials. It creates one deterministic archive and transfers only that
+archive to an isolated OIDC publisher job.
 
 The Windhawk compiler, headers and upstream source inputs are downloaded only
 from HTTPS locations whose byte size and SHA-256 are pinned in
@@ -34,3 +38,7 @@ the reviewed allowlist.
 The MyWallpaper SDK header is MIT licensed. The pinned Windhawk engine and API
 remain governed by their upstream GPL terms; this build repository does not
 ship the engine itself.
+
+Companion executables use the `process-v2` runtime and implement MyWallpaper's
+strict, surface-aware
+[companion protocol v2](https://github.com/MyWallpapers/MyWallpaper/blob/main/docs/native-addons.md#companion-protocol-v2).
