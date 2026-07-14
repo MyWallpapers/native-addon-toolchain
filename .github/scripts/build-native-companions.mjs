@@ -99,8 +99,8 @@ function parseJson(bytes, label) {
 function companionEntries(manifest) {
   const companion = record(manifest?.native) ? manifest.native.companion : undefined;
   if (companion === undefined || companion === null) return [];
-  if (!record(companion) || companion.runtime !== "process-v1" || !record(companion.entries)) {
-    throw new Error("manifest.native.companion must use process-v1 and declare entries.");
+  if (!record(companion) || companion.runtime !== "process-v2" || !record(companion.entries)) {
+    throw new Error("manifest.native.companion must use process-v2 and declare entries.");
   }
   const entries = Object.entries(companion.entries).map(([target, rawEntry]) => {
     if (!COMPANION_TARGETS.has(target)) throw new Error(`Unsupported companion target: ${target}.`);
