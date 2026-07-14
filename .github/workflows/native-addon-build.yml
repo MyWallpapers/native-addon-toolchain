@@ -136,7 +136,10 @@ jobs:
         shell: pwsh
         env:
           NATIVE_BUILD_ARCHIVE: ${{ steps.package.outputs.archive }}
-          NATIVE_BUILD_PUBLISH_URL: https://mywallpaper.online/api/native-builds
+          # This endpoint is part of the reviewed trust boundary. It must never
+          # be supplied by an untrusted caller because the request carries the
+          # short-lived GitHub OIDC token.
+          NATIVE_BUILD_PUBLISH_URL: https://dev.mywallpaper.online/api/native-builds
         run: |
           $audience = [uri]::EscapeDataString("mywallpaper-native-publish")
           $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains("?")) { "&" } else { "?" }
