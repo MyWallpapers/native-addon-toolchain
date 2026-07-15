@@ -48,8 +48,8 @@ isolation boundary.
 name: Publish MyWallpaper add-on
 
 on:
-  push:
-    tags: ['v*', '[0-9]*']
+  release:
+    types: [published]
 
 permissions:
   actions: read
