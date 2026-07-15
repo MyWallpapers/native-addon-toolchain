@@ -66,8 +66,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'No-hook fixture binding generation failed' }
           & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
             -RepositoryRoot fixtures/no-hooks `
-            -OutputRoot "$env:RUNNER_TEMP/build/no-hooks"
-          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/build/no-hooks/.empty" -PathType Leaf)) {
+            -OutputRoot "$env:RUNNER_TEMP/no-hooks-output"
+          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/no-hooks-output/.empty" -PathType Leaf)) {
             throw 'A manifest without hooks did not produce the empty marker'
           }
 
