@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: windows-2025
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -18,30 +19,165 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
+      - name: Set up pinned Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: .nvmrc
 
-      - name: Build and package the native fixture
+      - name: Verify canonical release validator and script syntax
         shell: pwsh
         run: |
-          & .github/scripts/build-native-hooks.ps1 `
+          & .github/scripts/expand-canonical-cli.ps1 `
+            -ArtifactRoot .github/canonical-cli `
+            -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
+          foreach ($script in @(
+            '.github/scripts/build-native-companions.mjs',
+            '.github/scripts/create-addon-bundle-index.mjs'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "$script has a JavaScript syntax error" }
+          }
+          foreach ($script in @(
+            '.github/scripts/expand-canonical-cli.ps1',
+            '.github/scripts/materialize-addon-build.ps1',
+            '.github/scripts/package-addon-bundle.ps1',
+            '.github/scripts/sync-canonical-cli.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) { throw "$script has a PowerShell syntax error: $($errors[0])" }
+          }
+
+      - name: Build and validate complete fixtures
+        shell: pwsh
+        env:
+          FIXTURE_COMMIT_SHA: ${{ github.sha }}
+          FIXTURE_REPOSITORY_ID: ${{ github.repository_id }}
+          FIXTURE_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          FIXTURE_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REF_NAME: 0.0.0
+          GITHUB_REF_TYPE: tag
+        run: |
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate `
+            --directory fixtures/no-hooks
+          if ($LASTEXITCODE -ne 0) { throw 'No-hook fixture binding generation failed' }
+          & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
             -RepositoryRoot fixtures/no-hooks `
-            -OutputRoot "$env:RUNNER_TEMP/native/no-hooks"
-          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/native/no-hooks/.empty" -PathType Leaf)) {
+            -OutputRoot "$env:RUNNER_TEMP/no-hooks-output"
+          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/no-hooks-output/.empty" -PathType Leaf)) {
             throw 'A manifest without hooks did not produce the empty marker'
           }
+
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate `
+            --directory fixtures/native-hook
+          if ($LASTEXITCODE -ne 0) { throw 'Native fixture binding generation failed' }
           node .github/scripts/build-native-companions.mjs `
             --repository-root fixtures/native-hook `
-            --output-root "$env:RUNNER_TEMP/native/companion"
-          & .github/scripts/build-native-hooks.ps1 `
+            --output-root "$env:RUNNER_TEMP/build/companion"
+          if ($LASTEXITCODE -ne 0) { throw 'Native fixture companion build failed' }
+          & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
             -RepositoryRoot fixtures/native-hook `
-            -OutputRoot "$env:RUNNER_TEMP/native/hooks"
-          & .github/scripts/package-native-build.ps1 `
-            -CompanionRoot "$env:RUNNER_TEMP/native/companion" `
-            -HooksRoot "$env:RUNNER_TEMP/native/hooks" `
-            -OutputArchive "$env:RUNNER_TEMP/native/package.zip"
-          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/native/package.zip" -PathType Leaf)) {
-            throw 'Native fixture package was not produced'
+            -OutputRoot "$env:RUNNER_TEMP/build/hooks"
+
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/build/web/dist", fixtures/native-hook/assets | Out-Null
+          '<!doctype html><meta charset="utf-8"><title>fixture</title>' |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP/build/web/dist/index.html" -Encoding utf8NoBOM
+          Add-Type -AssemblyName System.Drawing
+          $bitmap = [Drawing.Bitmap]::new(640, 360)
+          try {
+            $graphics = [Drawing.Graphics]::FromImage($bitmap)
+            try { $graphics.Clear([Drawing.Color]::FromArgb(20, 24, 32)) }
+            finally { $graphics.Dispose() }
+            $bitmap.Save(
+              (Join-Path $env:GITHUB_WORKSPACE 'fixtures/native-hook/assets/thumbnail.png'),
+              [Drawing.Imaging.ImageFormat]::Png
+            )
+          } finally { $bitmap.Dispose() }
+
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/build/web/dist/__mywallpaper/native" | Out-Null
+          New-Item -ItemType File -Force "$env:RUNNER_TEMP/build/web/dist/__mywallpaper/native/dev-only.exe" | Out-Null
+          $rejectedDevelopmentOutput = $false
+          try {
+            & .github/scripts/materialize-addon-build.ps1 `
+              -BuildRoot "$env:RUNNER_TEMP/build" `
+              -RepositoryRoot fixtures/native-hook
+          } catch {
+            if (-not $_.Exception.Message.Contains(
+              'Development-only MyWallpaper output',
+              [StringComparison]::Ordinal
+            )) { throw }
+            $rejectedDevelopmentOutput = $true
           }
+          if (-not $rejectedDevelopmentOutput) {
+            throw 'Verifier did not reject a development-only native output'
+          }
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/build/web/dist/__mywallpaper" -Recurse -Force
+
+          & .github/scripts/materialize-addon-build.ps1 `
+            -BuildRoot "$env:RUNNER_TEMP/build" `
+            -RepositoryRoot fixtures/native-hook
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate `
+            --directory fixtures/native-hook
+          if ($LASTEXITCODE -ne 0) { throw 'Materialized fixture binding generation failed' }
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check --json `
+            --directory fixtures/native-hook
+          if ($LASTEXITCODE -ne 0) { throw 'Materialized fixture validation failed' }
+
+          foreach ($name in @('first.zip', 'second.zip')) {
+            & .github/scripts/package-addon-bundle.ps1 `
+              -RepositoryRoot fixtures/native-hook `
+              -CompanionRoot "$env:RUNNER_TEMP/build/companion" `
+              -HooksRoot "$env:RUNNER_TEMP/build/hooks" `
+              -RepositoryId $env:FIXTURE_REPOSITORY_ID `
+              -RepositoryOwner $env:FIXTURE_REPOSITORY_OWNER `
+              -RepositoryName $env:FIXTURE_REPOSITORY_NAME `
+              -CommitSha $env:FIXTURE_COMMIT_SHA `
+              -OutputArchive "$env:RUNNER_TEMP/$name"
+          }
+          $first = (Get-FileHash -LiteralPath "$env:RUNNER_TEMP/first.zip" -Algorithm SHA256).Hash
+          $second = (Get-FileHash -LiteralPath "$env:RUNNER_TEMP/second.zip" -Algorithm SHA256).Hash
+          if ($first -cne $second) { throw 'Identical verified inputs did not produce an identical bundle' }
+
+          Add-Type -AssemblyName System.IO.Compression
+          $zip = [IO.Compression.ZipFile]::OpenRead("$env:RUNNER_TEMP/first.zip")
+          try {
+            $indexEntry = $zip.GetEntry('bundle-index.json')
+            if ($null -eq $indexEntry) { throw 'Bundle index is missing' }
+            $reader = [IO.StreamReader]::new($indexEntry.Open(), [Text.Encoding]::UTF8)
+            try { $index = $reader.ReadToEnd() | ConvertFrom-Json }
+            finally { $reader.Dispose() }
+            $indexKeys = @($index.PSObject.Properties.Name | Sort-Object)
+            $expectedIndexKeys = @(
+              'schemaVersion', 'version', 'provenance', 'sourceDigest',
+              'manifestDigest', 'capabilitySnapshot', 'entry', 'files'
+            ) | Sort-Object
+            if (($indexKeys -join "`n") -cne ($expectedIndexKeys -join "`n")) {
+              throw 'Bundle index contains a non-canonical root field'
+            }
+            if ($index.schemaVersion -ne 1 -or $index.capabilitySnapshot.runtime -cne 'canvas-v1') {
+              throw 'Bundle index does not use the canonical contract'
+            }
+            if (@($index.files).Count -eq 0 -or $null -ne $index.distributionDigest) {
+              throw 'Bundle index inventory is invalid or self-referential'
+            }
+            $paths = @($index.files | ForEach-Object { $_.path })
+            $sortedPaths = [string[]]@($paths)
+            [Array]::Sort($sortedPaths, [StringComparer]::Ordinal)
+            if (
+              ($paths -join "`n") -cne ($sortedPaths -join "`n") -or
+              $paths -contains 'bundle-index.json' -or
+              $paths -notcontains 'LICENSE'
+            ) {
+              throw 'Bundle index payload inventory is unsorted, incomplete, or self-referential'
+            }
+            foreach ($file in $index.files) {
+              $fileKeys = @($file.PSObject.Properties.Name | Sort-Object)
+              $expectedFileKeys = @('path', 'size', 'sha256', 'mediaType') | Sort-Object
+              if (($fileKeys -join "`n") -cne ($expectedFileKeys -join "`n")) {
+                throw 'Bundle index payload entry contains a non-canonical field'
+              }
+            }
+          } finally { $zip.Dispose() }
