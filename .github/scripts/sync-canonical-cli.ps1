@@ -14,17 +14,17 @@ if ($LASTEXITCODE -ne 0 -or $ActualCommit -cne $SourceCommit) {
 }
 $Remote = (& git -C $MyWallpaperRoot remote get-url origin).Trim()
 if ($LASTEXITCODE -ne 0 -or $Remote -notmatch '^(?:git@github\.com:|https://github\.com/)MyWallpapers/MyWallpaper(?:\.git)?$') {
-  throw 'Canonical CLI must be exported from MyWallpapers/MyWallpaper'
+  throw 'Canonical release validator must be exported from MyWallpapers/MyWallpaper'
 }
 $Status = (& git -C $MyWallpaperRoot status --porcelain=v1 --untracked-files=all) -join "`n"
 if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($Status)) {
-  throw 'MyWallpaper checkout must be clean before exporting the canonical CLI'
+  throw 'MyWallpaper checkout must be clean before exporting the canonical release validator'
 }
 
 Push-Location $MyWallpaperRoot
 try {
-  corepack pnpm --filter '@mywallpaper/cli' run build:dist
-  if ($LASTEXITCODE -ne 0) { throw 'Canonical CLI build failed' }
+  corepack pnpm --filter '@mywallpaper/cli' run build:release-validator
+  if ($LASTEXITCODE -ne 0) { throw 'Canonical release validator build failed' }
 } finally { Pop-Location }
 
 $ArtifactRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../canonical-cli'))
@@ -36,7 +36,7 @@ function Copy-RegularTree([string]$Source, [string]$Destination, [string]$Filter
   $Source = (Resolve-Path -LiteralPath $Source).ProviderPath
   foreach ($Item in Get-ChildItem -LiteralPath $Source -File -Recurse -Filter $Filter | Sort-Object FullName) {
     if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "Canonical CLI source contains a reparse point: $($Item.FullName)"
+      throw "Canonical release validator source contains a reparse point: $($Item.FullName)"
     }
     $Relative = $Item.FullName.Substring($Source.Length).TrimStart([char[]]@('\', '/'))
     $Output = Join-Path $Destination $Relative
@@ -70,7 +70,7 @@ while (true) {
 '@
   $Resolved = (& node -e $ResolveScript $FromDirectory $PackageName).Trim()
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Resolved)) {
-    throw "Could not resolve canonical CLI runtime package: $PackageName"
+    throw "Could not resolve canonical release validator runtime package: $PackageName"
   }
   return (Resolve-Path -LiteralPath $Resolved).ProviderPath
 }
@@ -78,16 +78,20 @@ while (true) {
 function Assert-PackageIdentity([string]$Root, [string]$ExpectedName, [string]$ExpectedVersion) {
   $Package = Get-Content -LiteralPath (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json
   if ($Package.name -cne $ExpectedName -or $Package.version -cne $ExpectedVersion) {
-    throw "Canonical CLI dependency must be $ExpectedName@$ExpectedVersion"
+    throw "Canonical release validator dependency must be $ExpectedName@$ExpectedVersion"
   }
 }
 
 try {
   $CliRoot = Join-Path $MyWallpaperRoot 'packages/cli'
   $RuntimeRoot = Join-Path $MyWallpaperRoot 'packages/runtime-kernel'
-  Copy-RegularTree (Join-Path $CliRoot 'dist') (Join-Path $Staging 'cli/dist')
+  Copy-RegularTree (Join-Path $CliRoot 'release-dist') (Join-Path $Staging 'cli/dist')
   New-Item -ItemType Directory -Path (Join-Path $Staging 'cli') -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $CliRoot 'package.json') -Destination (Join-Path $Staging 'cli/package.json')
+  [ordered]@{
+    name = '@mywallpaper/release-validator'
+    private = $true
+    type = 'module'
+  } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Staging 'cli/package.json') -Encoding utf8NoBOM
   Copy-Item -LiteralPath (Join-Path $CliRoot 'LICENSE') -Destination (Join-Path $Staging 'cli/LICENSE')
 
   $RuntimeDestination = Join-Path $Staging 'cli/node_modules/@mywallpaper/runtime-kernel'
@@ -155,4 +159,4 @@ try {
   Remove-Item -LiteralPath $ArchiveTemporary -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Exported canonical CLI from MyWallpapers/MyWallpaper@$SourceCommit"
+Write-Host "Exported canonical release validator from MyWallpapers/MyWallpaper@$SourceCommit"

@@ -27,18 +27,22 @@ if (
 $ArchivePath = Join-Path $ArtifactRoot $Lock.archive
 $ArchiveItem = Get-Item -LiteralPath $ArchivePath -Force
 if ($ArchiveItem.PSIsContainer -or ($ArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw 'Canonical CLI artifact must be a regular file'
+  throw 'Canonical release validator artifact must be a regular file'
 }
-if ($ArchiveItem.Length -ne $LockSize) { throw 'Canonical CLI artifact size does not match its lock' }
+if ($ArchiveItem.Length -ne $LockSize) { throw 'Canonical release validator artifact size does not match its lock' }
 $ActualDigest = 'sha256:' + (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($ActualDigest -cne [string]$Lock.sha256) { throw 'Canonical CLI artifact digest does not match its lock' }
+if ($ActualDigest -cne [string]$Lock.sha256) { throw 'Canonical release validator artifact digest does not match its lock' }
 
 $Destination = [IO.Path]::GetFullPath($Destination)
-if (Test-Path -LiteralPath $Destination) { throw 'Canonical CLI destination must not already exist' }
+if (Test-Path -LiteralPath $Destination) { throw 'Canonical release validator destination must not already exist' }
 New-Item -ItemType Directory -Path $Destination | Out-Null
 $DestinationPrefix = $Destination.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $ExpandedBytes = 0L
+$ForbiddenValidatorPaths = @(
+  '^cli/dist/(?:cli|index|process-supervisor)(?:\..+)?$',
+  '^cli/dist/commands/(?:init|dev|dev-preview|doctor(?:-[A-Za-z0-9_-]+)?|hook-builder|hook-watch)(?:\..+)?$'
+)
 
 function Assert-CanonicalArtifactSegment([string]$Segment, [string]$Path) {
   $Stem = ($Segment -split '\.', 2)[0].ToUpperInvariant()
@@ -51,7 +55,7 @@ function Assert-CanonicalArtifactSegment([string]$Segment, [string]$Path) {
       'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
       'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
     )
-  ) { throw "Canonical CLI artifact contains a non-canonical path: $Path" }
+  ) { throw "Canonical release validator artifact contains a non-canonical path: $Path" }
 }
 
 Add-Type -AssemblyName System.IO.Compression
@@ -60,25 +64,30 @@ try {
   $Archive = [IO.Compression.ZipArchive]::new($Input, [IO.Compression.ZipArchiveMode]::Read, $false)
   try {
     if ($Archive.Entries.Count -eq 0 -or $Archive.Entries.Count -gt 1000) {
-      throw 'Canonical CLI artifact has an invalid file count'
+      throw 'Canonical release validator artifact has an invalid file count'
     }
     foreach ($Entry in $Archive.Entries) {
       $Path = $Entry.FullName
       if (
         [string]::IsNullOrWhiteSpace($Entry.Name) -or $Path.Contains('\') -or $Path.Contains(':') -or
         [Text.Encoding]::UTF8.GetByteCount($Path) -gt 900
-      ) { throw "Canonical CLI artifact contains an invalid path: $Path" }
+      ) { throw "Canonical release validator artifact contains an invalid path: $Path" }
+      foreach ($ForbiddenPattern in $ForbiddenValidatorPaths) {
+        if ($Path -match $ForbiddenPattern) {
+          throw "Canonical release validator contains a forbidden CLI artifact: $Path"
+        }
+      }
       foreach ($Segment in $Path.Split('/')) { Assert-CanonicalArtifactSegment $Segment $Path }
       $UnixKind = ($Entry.ExternalAttributes -shr 16) -band 0xF000
-      if ($UnixKind -eq 0xA000) { throw "Canonical CLI artifact contains a symbolic link: $Path" }
-      if (-not $Seen.Add($Path)) { throw "Canonical CLI artifact contains a duplicate path: $Path" }
+      if ($UnixKind -eq 0xA000) { throw "Canonical release validator artifact contains a symbolic link: $Path" }
+      if (-not $Seen.Add($Path)) { throw "Canonical release validator artifact contains a duplicate path: $Path" }
       $ExpandedBytes += $Entry.Length
       if ($Entry.Length -gt 24MB -or $ExpandedBytes -gt 32MB) {
-        throw 'Canonical CLI artifact exceeds its expanded size limit'
+        throw 'Canonical release validator artifact exceeds its expanded size limit'
       }
       $Output = [IO.Path]::GetFullPath((Join-Path $Destination $Path.Replace('/', [IO.Path]::DirectorySeparatorChar)))
       if (-not $Output.StartsWith($DestinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Canonical CLI artifact escapes its destination: $Path"
+        throw "Canonical release validator artifact escapes its destination: $Path"
       }
       New-Item -ItemType Directory -Path (Split-Path -Parent $Output) -Force | Out-Null
       $SourceStream = $Entry.Open()
@@ -90,6 +99,7 @@ try {
 } finally { $Input.Dispose() }
 
 foreach ($Required in @(
+  'cli/package.json',
   'cli/dist/bin.js',
   'cli/dist/windhawk/build-native-hooks.ps1',
   'cli/dist/windhawk/install-windhawk-toolchain.ps1',
@@ -105,20 +115,30 @@ foreach ($Required in @(
   'provenance.json'
 )) {
   if (-not (Test-Path -LiteralPath (Join-Path $Destination $Required.Replace('/', [IO.Path]::DirectorySeparatorChar)) -PathType Leaf)) {
-    throw "Canonical CLI artifact is incomplete: $Required"
+    throw "Canonical release validator artifact is incomplete: $Required"
   }
 }
+
+$ValidatorPackagePath = Join-Path $Destination 'cli/package.json'
+$ValidatorPackage = Get-Content -LiteralPath $ValidatorPackagePath -Raw | ConvertFrom-Json
+$ValidatorPackageKeys = @($ValidatorPackage.PSObject.Properties.Name | Sort-Object)
+if (
+  ($ValidatorPackageKeys -join "`n") -cne ((@('name', 'private', 'type') | Sort-Object) -join "`n") -or
+  $ValidatorPackage.name -cne '@mywallpaper/release-validator' -or
+  $ValidatorPackage.private -ne $true -or
+  $ValidatorPackage.type -cne 'module'
+) { throw 'Canonical release validator package identity is invalid' }
 
 $ProvenancePath = Join-Path $Destination 'provenance.json'
 $Provenance = Get-Content -LiteralPath $ProvenancePath -Raw | ConvertFrom-Json
 $ProvenanceKeys = @($Provenance.PSObject.Properties.Name | Sort-Object)
 if (($ProvenanceKeys -join "`n") -cne ((@('sourceRepository', 'sourceCommit') | Sort-Object) -join "`n")) {
-  throw 'Canonical CLI provenance contains an unexpected field'
+  throw 'Canonical release validator provenance contains an unexpected field'
 }
 if (
   $Provenance.sourceRepository -cne $Lock.sourceRepository -or
   $Provenance.sourceCommit -cne $Lock.sourceCommit
-) { throw 'Canonical CLI provenance does not match its lock' }
+) { throw 'Canonical release validator provenance does not match its lock' }
 
 $ExpectedRuntimePackages = [ordered]@{
   'sharp' = '0.35.3'
@@ -131,8 +151,8 @@ foreach ($PackageName in $ExpectedRuntimePackages.Keys) {
   $PackagePath = Join-Path $Destination "cli/node_modules/$PackageName/package.json"
   $Package = Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
   if ($Package.name -cne $PackageName -or $Package.version -cne $ExpectedRuntimePackages[$PackageName]) {
-    throw "Canonical CLI contains an unexpected $PackageName package"
+    throw "Canonical release validator contains an unexpected $PackageName package"
   }
 }
 
-Write-Host "Verified canonical CLI from $($Lock.sourceRepository)@$($Lock.sourceCommit)"
+Write-Host "Verified canonical release validator from $($Lock.sourceRepository)@$($Lock.sourceCommit)"

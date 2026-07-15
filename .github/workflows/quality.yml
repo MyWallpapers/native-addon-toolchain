@@ -24,7 +24,7 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Verify canonical CLI and script syntax
+      - name: Verify canonical release validator and script syntax
         shell: pwsh
         run: |
           & .github/scripts/expand-canonical-cli.ps1 `
