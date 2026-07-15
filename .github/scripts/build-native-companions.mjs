@@ -88,6 +88,11 @@ function inside(root, relativePath, label) {
   return output;
 }
 
+function containsPath(root, candidate) {
+  const fromRoot = relative(root, candidate);
+  return fromRoot === "" || (!isAbsolute(fromRoot) && fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`));
+}
+
 function parseJson(bytes, label) {
   try {
     return JSON.parse(bytes.toString("utf8"));
@@ -216,6 +221,9 @@ async function copyTreeWithoutLinks(source, destination, label) {
 export async function buildNativeCompanions({ repositoryRoot, outputRoot }) {
   repositoryRoot = resolve(repositoryRoot);
   outputRoot = resolve(outputRoot);
+  if (containsPath(repositoryRoot, outputRoot) || containsPath(outputRoot, repositoryRoot)) {
+    throw new Error("Native companion output must be a separate staging tree outside the repository.");
+  }
   const manifestPath = join(repositoryRoot, "manifest.json");
   const manifestBytes = await readFile(manifestPath);
   const manifest = parseJson(manifestBytes, "manifest.json");

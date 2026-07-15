@@ -1,25 +1,37 @@
-name: Native add-on build
+name: MyWallpaper add-on release
 
 on:
   workflow_call:
+    inputs:
+      channel:
+        description: Hardcoded MyWallpaper publication channel (development or production)
+        required: false
+        default: development
+        type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  verify-web:
-    runs-on: windows-2025
-    timeout-minutes: 15
+  build-web-untrusted:
+    name: Build untrusted web source (${{ matrix.replica }}/2)
+    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
+    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
     steps:
       - name: Checkout immutable caller commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
           path: caller
           persist-credentials: false
 
-      - name: Checkout trusted MyWallpaper toolchain
+      - name: Checkout the exact called workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ job.workflow_repository }}
@@ -27,43 +39,91 @@ jobs:
           path: toolchain
           persist-credentials: false
 
+      - name: Verify called workflow identity
+        shell: pwsh
+        env:
+          WORKFLOW_FILE: ${{ job.workflow_file_path }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
+          if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
+          if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
+          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
+          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
+          $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
+
       - name: Set up pinned Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: toolchain/.nvmrc
 
-      - name: Verify committed web build
+      - name: Build the exact web release without credentials
         shell: pwsh
         working-directory: caller
         env:
-          CI: "true"
+          CI: 'true'
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
         run: |
+          if ($env:RELEASE_REF_TYPE -ne 'tag') { throw 'Add-on releases are built only from an immutable Git tag' }
           corepack enable pnpm
+          if ($LASTEXITCODE -ne 0) { throw 'Could not enable the pinned pnpm package manager' }
           pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'The frozen JavaScript dependency install failed' }
           pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { throw 'Add-on typecheck failed' }
           pnpm build
-          $DirtyTree = @(git status --porcelain=v1 --untracked-files=all)
-          if ($DirtyTree.Count -ne 0) {
-            $DirtyTree | Write-Host
-            throw "The locked, typechecked web build must leave the complete caller working tree clean"
-          }
+          if ($LASTEXITCODE -ne 0) { throw 'Add-on web build failed' }
 
-  build:
-    needs: verify-web
-    runs-on: windows-2025
-    timeout-minutes: 40
+      - name: Stage only the untrusted web output
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-web-output'
+          Remove-Item -LiteralPath $output -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$output/web" | Out-Null
+          Copy-Item -LiteralPath caller/dist -Destination "$output/web/dist" -Recurse -Force
+
+      - name: Transfer only the untrusted web output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-web-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-web-output
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+          retention-days: 1
+
+  build-native-untrusted:
+    name: Build untrusted native ${{ matrix.component }} (${{ matrix.replica }}/${{ matrix.replicas }})
+    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
+    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    timeout-minutes: 60
     permissions:
       contents: read
-    outputs:
-      archive-name: ${{ steps.package.outputs.archive-name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: hooks
+            replica: 1
+            replicas: 1
+          - component: companion
+            replica: 1
+            replicas: 2
+          - component: companion
+            replica: 2
+            replicas: 2
     steps:
       - name: Checkout immutable caller commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
           path: caller
           persist-credentials: false
 
-      - name: Checkout trusted MyWallpaper toolchain
+      - name: Checkout the exact called workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ job.workflow_repository }}
@@ -71,34 +131,241 @@ jobs:
           path: toolchain
           persist-credentials: false
 
+      - name: Verify called workflow identity
+        shell: pwsh
+        env:
+          WORKFLOW_FILE: ${{ job.workflow_file_path }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
+          if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
+          if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
+          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
+          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
+          $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
+
       - name: Set up pinned Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: toolchain/.nvmrc
 
-      - name: Build native outputs without credentials
+      - name: Verify and expand canonical MyWallpaper CLI
+        if: matrix.component == 'hooks'
         shell: pwsh
         run: |
-          node "$env:GITHUB_WORKSPACE/toolchain/.github/scripts/build-native-companions.mjs" `
-            --repository-root "$env:GITHUB_WORKSPACE/caller" `
-            --output-root "$env:RUNNER_TEMP/mywallpaper-native/companion"
-          & "$env:GITHUB_WORKSPACE/toolchain/.github/scripts/build-native-hooks.ps1" `
-            -RepositoryRoot "$env:GITHUB_WORKSPACE/caller" `
-            -OutputRoot "$env:RUNNER_TEMP/mywallpaper-native/hooks"
+          & toolchain/.github/scripts/expand-canonical-cli.ps1 `
+            -ArtifactRoot toolchain/.github/canonical-cli `
+            -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
 
-      - name: Create deterministic native package
+      - name: Build one isolated native component without credentials
+        shell: pwsh
+        env:
+          NATIVE_COMPONENT: ${{ matrix.component }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "mywallpaper-$env:NATIVE_COMPONENT-output"
+          switch ($env:NATIVE_COMPONENT) {
+            'hooks' {
+              Remove-Item -LiteralPath caller/native/generated -Recurse -Force -ErrorAction SilentlyContinue
+              node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller
+              if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
+              & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
+                -RepositoryRoot caller `
+                -OutputRoot $output
+            }
+            'companion' {
+              node toolchain/.github/scripts/build-native-companions.mjs `
+                --repository-root caller `
+                --output-root $output
+            }
+            default { throw 'Unexpected native build component' }
+          }
+
+      - name: Transfer one isolated native output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-${{ matrix.component }}-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-${{ matrix.component }}-output
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+          retention-days: 1
+
+  verify-package:
+    name: Verify and package on a fresh runner
+    needs: [build-web-untrusted, build-native-untrusted]
+    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
+    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      archive-name: ${{ steps.package.outputs.archive-name }}
+      archive-sha256: ${{ steps.package.outputs.archive-sha256 }}
+      archive-size: ${{ steps.package.outputs.archive-size }}
+      distribution-digest: ${{ steps.package.outputs.distribution-digest }}
+    steps:
+      - name: Checkout immutable caller commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: caller
+          persist-credentials: false
+
+      - name: Checkout the exact called workflow revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: toolchain
+          persist-credentials: false
+
+      - name: Verify called workflow identity
+        shell: pwsh
+        env:
+          WORKFLOW_FILE: ${{ job.workflow_file_path }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
+          if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
+          if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
+          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
+          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
+          $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: toolchain/.nvmrc
+
+      - name: Verify and expand canonical MyWallpaper CLI
+        shell: pwsh
+        run: |
+          & toolchain/.github/scripts/expand-canonical-cli.ps1 `
+            -ArtifactRoot toolchain/.github/canonical-cli `
+            -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
+
+      - name: Download primary web output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-web-1-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-output
+
+      - name: Download reproduced web output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-web-2-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-reproduction
+
+      - name: Download primary companion output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-companion-1-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-output/companion
+
+      - name: Download reproduced companion output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-companion-2-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-reproduction/companion
+
+      - name: Download hook output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-hooks-1-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-output/hooks
+
+      - name: Validate and create the deterministic bundle
         id: package
         shell: pwsh
+        env:
+          CALLER_COMMIT_SHA: ${{ github.sha }}
+          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+          CALLER_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          CALLER_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CALLER_REF_TYPE: ${{ github.ref_type }}
+          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CALLER_RUN_ID: ${{ github.run_id }}
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "mywallpaper-native-build.zip"
-          & "$env:GITHUB_WORKSPACE/toolchain/.github/scripts/package-native-build.ps1" `
-            -CompanionRoot "$env:RUNNER_TEMP/mywallpaper-native/companion" `
-            -HooksRoot "$env:RUNNER_TEMP/mywallpaper-native/hooks" `
+          if ($env:CALLER_REF_TYPE -ne 'tag') { throw 'Add-on releases require a Git tag' }
+          $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-output'
+          $reproduction = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-reproduction'
+          function Get-FileInventory([string]$root, [string]$label) {
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { throw "$label is missing" }
+            $root = (Resolve-Path -LiteralPath $root).ProviderPath
+            $rootItem = Get-Item -LiteralPath $root -Force
+            if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw "$label root cannot be a link, junction, or reparse point"
+            }
+            $inventory = [Collections.Generic.List[string]]::new()
+            $pending = [Collections.Generic.Stack[string]]::new()
+            $pending.Push($root)
+            while ($pending.Count -gt 0) {
+              $directory = $pending.Pop()
+              foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force)) {
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                  throw "$label contains a link, junction, or reparse point: $($item.FullName)"
+                }
+                if ($item.PSIsContainer) {
+                  $pending.Push($item.FullName)
+                  continue
+                }
+                $relative = $item.FullName.Substring($root.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+                $sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                $inventory.Add("$relative|$($item.Length)|$sha256")
+              }
+            }
+            $result = [string[]]@($inventory)
+            [Array]::Sort($result, [StringComparer]::Ordinal)
+            return $result
+          }
+          function Assert-ByteIdentical([string]$primary, [string]$reproduced, [string]$label) {
+            $primaryInventory = Get-FileInventory $primary "primary $label output"
+            $reproducedInventory = Get-FileInventory $reproduced "reproduced $label output"
+            if (($primaryInventory -join "`n") -cne ($reproducedInventory -join "`n")) {
+              throw "$label outputs are not reproducible from the immutable source commit"
+            }
+          }
+          Assert-ByteIdentical "$output/web" "$reproduction/web" 'Web build'
+          Assert-ByteIdentical "$output/companion" "$reproduction/companion" 'Native companion build'
+          & toolchain/.github/scripts/materialize-addon-build.ps1 `
+            -BuildRoot $output `
+            -RepositoryRoot caller
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check --json --directory caller
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on validation failed' }
+          git -C caller ls-files --error-unmatch -- generated/mywallpaper-runtime.d.ts
+          if ($LASTEXITCODE -ne 0) { throw 'generated/mywallpaper-runtime.d.ts must be committed' }
+          git -C caller diff --exit-code -- . ':(exclude)dist/**' ':(exclude)native/out/**' ':(exclude)native/generated/**'
+          if ($LASTEXITCODE -ne 0) { throw 'Generated add-on bindings are stale' }
+
+          $rebuiltHooks = Join-Path $env:RUNNER_TEMP 'mywallpaper-hooks-rebuilt'
+          & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
+            -RepositoryRoot caller `
+            -OutputRoot $rebuiltHooks
+          Assert-ByteIdentical "$output/hooks" $rebuiltHooks 'Windhawk hook build'
+
+          $archive = Join-Path $env:RUNNER_TEMP 'mywallpaper-addon-bundle.zip'
+          & toolchain/.github/scripts/package-addon-bundle.ps1 `
+            -RepositoryRoot caller `
+            -CompanionRoot "$output/companion" `
+            -HooksRoot "$output/hooks" `
+            -RepositoryId $env:CALLER_REPOSITORY_ID `
+            -RepositoryOwner $env:CALLER_REPOSITORY_OWNER `
+            -RepositoryName $env:CALLER_REPOSITORY_NAME `
+            -CommitSha $env:CALLER_COMMIT_SHA `
             -OutputArchive $archive
           "archive=$archive" >> $env:GITHUB_OUTPUT
-          "archive-name=mywallpaper-native-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
+          "archive-name=mywallpaper-addon-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
 
-      - name: Transfer immutable archive to isolated publisher
+      - name: Transfer one immutable bundle to the isolated publisher
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.package.outputs.archive-name }}
@@ -107,55 +374,100 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  publish:
-    needs: build
-    runs-on: windows-2025
-    timeout-minutes: 10
+  publish-oidc:
+    name: Attest and publish with OIDC only
+    needs: verify-package
+    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
+    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    timeout-minutes: 15
     permissions:
       actions: read
+      attestations: write
       contents: read
       id-token: write
     steps:
-      - name: Download archive without executing or extracting its contents
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.build.outputs.archive-name }}
-          path: ${{ runner.temp }}/mywallpaper-native-publish
-
-      - name: Locate the single archive
-        id: package
-        shell: pwsh
-        run: |
-          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/mywallpaper-native-publish" -File -Filter *.zip)
-          if ($archives.Count -ne 1) {
-            throw "Expected exactly one native build archive, got $($archives.Count)"
-          }
-          "archive=$($archives[0].FullName)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload through GitHub OIDC
+      - name: Resolve the hardcoded publication endpoint
+        id: publication
         shell: pwsh
         env:
-          NATIVE_BUILD_ARCHIVE: ${{ steps.package.outputs.archive }}
-          # This endpoint is part of the reviewed trust boundary. It must never
-          # be supplied by an untrusted caller because the request carries the
-          # short-lived GitHub OIDC token.
-          NATIVE_BUILD_PUBLISH_URL: https://dev.mywallpaper.online/api/native-builds
+          PUBLICATION_CHANNEL: ${{ inputs.channel }}
         run: |
-          $audience = [uri]::EscapeDataString("mywallpaper-native-publish")
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains("?")) { "&" } else { "?" }
+          switch ($env:PUBLICATION_CHANNEL) {
+            'development' {
+              'audience=mywallpaper-addon-release-development' >> $env:GITHUB_OUTPUT
+              'url=https://dev.mywallpaper.online/api/addon-releases' >> $env:GITHUB_OUTPUT
+            }
+            'production' {
+              'audience=mywallpaper-addon-release-production' >> $env:GITHUB_OUTPUT
+              'url=https://mywallpaper.online/api/addon-releases' >> $env:GITHUB_OUTPUT
+            }
+            default { throw 'channel must be development or production' }
+          }
+
+      - name: Download bundle without executing or extracting it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.verify-package.outputs.archive-name }}
+          path: ${{ runner.temp }}/mywallpaper-addon-publish
+
+      - name: Verify the single immutable bundle
+        id: package
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
+          EXPECTED_SIZE: ${{ needs.verify-package.outputs.archive-size }}
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/mywallpaper-addon-publish" -File -Filter *.zip)
+          if ($archives.Count -ne 1) { throw "Expected exactly one add-on bundle, got $($archives.Count)" }
+          if ($archives[0].Length -ne [long]$env:EXPECTED_SIZE) { throw 'Publisher received a bundle with an unexpected size' }
+          $actual = 'sha256:' + (Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:EXPECTED_SHA256) { throw 'Publisher received a bundle with an unexpected digest' }
+          "archive=$($archives[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Attest the exact bundle
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.0.0
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+
+      - name: Publish the immutable release through GitHub OIDC
+        shell: pwsh
+        env:
+          ADDON_BUNDLE: ${{ steps.package.outputs.archive }}
+          PUBLICATION_AUDIENCE: ${{ steps.publication.outputs.audience }}
+          PUBLICATION_URL: ${{ steps.publication.outputs.url }}
+          DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
+        run: |
+          $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
+          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
           $tokenResponse = Invoke-RestMethod `
             -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
             -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$separator`audience=$audience"
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-            throw "GitHub OIDC token was not returned"
+          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) { throw 'GitHub OIDC token was not returned' }
+          $idempotencyKey = "addon-release:$env:GITHUB_REPOSITORY_ID:$env:GITHUB_SHA"
+          try {
+            $response = Invoke-RestMethod `
+              -Method Post `
+              -Uri $env:PUBLICATION_URL `
+              -MaximumRedirection 0 `
+              -Headers @{
+                Authorization = "Bearer $($tokenResponse.value)"
+                'Idempotency-Key' = $idempotencyKey
+                'X-Request-ID' = $idempotencyKey
+                'X-MyWallpaper-Distribution-Digest' = $env:DISTRIBUTION_DIGEST
+              } `
+              -ContentType 'application/zip' `
+              -InFile $env:ADDON_BUNDLE
+          } catch {
+            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
+            throw "MyWallpaper publication rejected the release: $detail"
           }
-          $requestId = "native-build:${env:GITHUB_REPOSITORY_ID}:${env:GITHUB_SHA}:${env:GITHUB_RUN_ID}:${env:GITHUB_RUN_ATTEMPT}"
-          Invoke-RestMethod `
-            -Method Post `
-            -Uri $env:NATIVE_BUILD_PUBLISH_URL `
-            -Headers @{
-              Authorization = "Bearer $($tokenResponse.value)"
-              "X-Request-ID" = $requestId
-            } `
-            -ContentType "application/zip" `
-            -InFile $env:NATIVE_BUILD_ARCHIVE
+          if ($response.state -cne 'available') {
+            throw "MyWallpaper publication did not make the release available (state: $($response.state))"
+          }
+          if ($response.distributionDigest -cne $env:DISTRIBUTION_DIGEST) {
+            throw 'MyWallpaper publication returned a different distribution digest'
+          }
+          if (([string]$response.addonReleaseId) -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
+            throw 'MyWallpaper publication returned an invalid release identity'
+          }
+          $response | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

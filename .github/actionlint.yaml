@@ -1,0 +1,10 @@
+self-hosted-runner:
+  labels:
+    - mywallpaper-native-build
+
+paths:
+  .github/workflows/native-addon-build.yml:
+    ignore:
+      # GitHub.com exposes these documented job identity properties for reusable
+      # workflows; actionlint 1.7.12 has not added them to its expression model.
+      - 'property "workflow_(repository|sha|file_path|ref)" is not defined in object type'

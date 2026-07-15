@@ -1,6 +1,11 @@
 {
-  "runtime": "trusted-native-canvas-v1",
+  "runtime": "canvas-v1",
   "name": "No hooks smoke",
+  "description": "Exercises an add-on without native hooks.",
   "version": "1.0.0",
-  "entry": "dist/index.html"
+  "entry": "dist/index.html",
+  "thumbnail": "assets/thumbnail.png",
+  "deviceSettingsVersion": "1",
+  "settings": [],
+  "ui": { "pointerEvents": "none" }
 }

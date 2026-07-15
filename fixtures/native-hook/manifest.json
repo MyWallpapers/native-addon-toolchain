@@ -1,8 +1,23 @@
 {
-  "runtime": "trusted-native-canvas-v1",
+  "runtime": "canvas-v1",
   "name": "Native hook build smoke",
+  "description": "Exercises the official Windhawk build and bundle pipeline.",
   "version": "0.0.0",
-  "entry": "index.html",
+  "entry": "dist/index.html",
+  "thumbnail": "assets/thumbnail.png",
+  "deviceSettingsVersion": "1",
+  "settings": [
+    {
+      "id": "revision",
+      "type": "number",
+      "label": "Revision",
+      "scope": "device",
+      "default": 0,
+      "min": 0,
+      "max": 1000,
+      "step": 1
+    }
+  ],
   "native": {
     "hooks": [
       {
@@ -12,5 +27,6 @@
         "surface": "windows-shell-v1"
       }
     ]
-  }
+  },
+  "ui": { "pointerEvents": "none" }
 }
