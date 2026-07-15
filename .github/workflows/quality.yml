@@ -105,7 +105,7 @@ jobs:
               -BuildRoot "$env:RUNNER_TEMP/build" `
               -RepositoryRoot fixtures/native-hook
           } catch {
-            $rejectedDevelopmentOutput = $_.Exception.Message -like '*Development-only MyWallpaper output*'
+            $rejectedDevelopmentOutput = $_.ToString() -like '*Development-only MyWallpaper output*'
           }
           if (-not $rejectedDevelopmentOutput) {
             throw 'Verifier did not reject a development-only native output'
