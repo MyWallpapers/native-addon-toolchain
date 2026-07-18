@@ -439,9 +439,13 @@ jobs:
         run: |
           $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
           $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
+          $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
+          if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
+            throw 'GitHub OIDC audience query construction failed'
+          }
           $tokenResponse = Invoke-RestMethod `
             -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$separator`audience=$audience"
+            -Uri $tokenUri
           if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) { throw 'GitHub OIDC token was not returned' }
           $idempotencyKey = "addon-release:$env:GITHUB_REPOSITORY_ID:$env:GITHUB_SHA"
           try {
