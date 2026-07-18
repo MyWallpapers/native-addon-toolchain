@@ -15,7 +15,9 @@ jobs:
   build-web-untrusted:
     name: Build untrusted web source (${{ matrix.replica }}/2)
     if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    # Caller-controlled source is compiled only on a fresh GitHub-hosted VM.
+    # No persistent MyWallpaper runner is allowed to execute add-on code.
+    runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       contents: read
@@ -98,7 +100,7 @@ jobs:
   build-native-untrusted:
     name: Build untrusted native ${{ matrix.component }} (${{ matrix.replica }}/${{ matrix.replicas }})
     if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    runs-on: windows-2025
     timeout-minutes: 60
     permissions:
       contents: read
@@ -197,7 +199,7 @@ jobs:
     name: Verify and package on a fresh runner
     needs: [build-web-untrusted, build-native-untrusted]
     if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       actions: read
@@ -378,7 +380,7 @@ jobs:
     name: Attest and publish with OIDC only
     needs: verify-package
     if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: [self-hosted, Windows, X64, mywallpaper-native-build]
+    runs-on: windows-2025
     timeout-minutes: 15
     permissions:
       actions: read
@@ -480,13 +482,20 @@ jobs:
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
             throw "MyWallpaper publication rejected the release: $detail"
           }
-          if ($response.state -cne 'available') {
-            throw "MyWallpaper publication did not make the release available (state: $($response.state))"
+          if ($response.state -cnotin @('candidate', 'available')) {
+            throw "MyWallpaper publication returned an invalid release state: $($response.state)"
           }
           if ($response.distributionDigest -cne $env:DISTRIBUTION_DIGEST) {
             throw 'MyWallpaper publication returned a different distribution digest'
           }
           if (([string]$response.addonReleaseId) -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
             throw 'MyWallpaper publication returned an invalid release identity'
+          }
+          if ($response.state -ceq 'candidate') {
+            @(
+              'The immutable bundle was accepted as a native release candidate.',
+              'MyWallpaper will expose it only after an independent isolated rebuild',
+              'reproduces the source, distribution and native file digests.'
+            ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
           }
           $response | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

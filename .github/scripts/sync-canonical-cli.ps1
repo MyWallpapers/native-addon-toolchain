@@ -144,14 +144,19 @@ try {
   $ArchivePath = Join-Path $ArtifactRoot 'mywallpaper-cli.zip'
   Move-Item -LiteralPath $ArchiveTemporary -Destination $ArchivePath -Force
   $ArchiveItem = Get-Item -LiteralPath $ArchivePath
-  [ordered]@{
+  $LockDocument = ([ordered]@{
     schemaVersion = 1
     sourceRepository = 'MyWallpapers/MyWallpaper'
     sourceCommit = $SourceCommit
     archive = 'mywallpaper-cli.zip'
     size = $ArchiveItem.Length
     sha256 = 'sha256:' + (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-  } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $ArtifactRoot 'canonical-cli.lock.json') -Encoding utf8NoBOM
+  } | ConvertTo-Json) -replace "`r`n", "`n"
+  [IO.File]::WriteAllText(
+    (Join-Path $ArtifactRoot 'canonical-cli.lock.json'),
+    $LockDocument + "`n",
+    [Text.UTF8Encoding]::new($false)
+  )
 } finally {
   Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $ArchiveTemporary -Force -ErrorAction SilentlyContinue

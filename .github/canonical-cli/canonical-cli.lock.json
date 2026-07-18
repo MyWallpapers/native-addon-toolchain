@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "MyWallpapers/MyWallpaper",
-  "sourceCommit": "ab6cec9eb4fb879e10df63437c83ff8674bce692",
+  "sourceCommit": "5c38ce2356613ac40e3a9d12d5bddec39784ceb0",
   "archive": "mywallpaper-cli.zip",
-  "size": 20557297,
-  "sha256": "sha256:ba6f796d3d8d152c93dd3794596643ebb591254f1bd4f0fec7bf1a846660718e"
+  "size": 20558521,
+  "sha256": "sha256:5d22605208c18526dd5b15e947929c2f1bec0da6f68254ee8e31560f1da80eb1"
 }
