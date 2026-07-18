@@ -105,8 +105,10 @@ foreach ($Required in @(
   'cli/dist/windhawk/install-windhawk-toolchain.ps1',
   'cli/dist/windhawk/mywallpaper_windhawk.hpp',
   'cli/dist/windhawk/windhawk-v1.lock.json',
-  'cli/node_modules/@mywallpaper/runtime-kernel/package.json',
-  'cli/node_modules/@mywallpaper/runtime-kernel/dist/addon-schema/index.js',
+  'cli/node_modules/@mywallpaper/sdk/package.json',
+  'cli/node_modules/@mywallpaper/sdk/dist/addon-schema/index.js',
+  'cli/node_modules/@mywallpaper/sdk/dist/protocol/index.js',
+  'cli/node_modules/@mywallpaper/sdk/dist/generated/addon-manifest-validator.generated.js',
   'cli/node_modules/sharp/package.json',
   'cli/node_modules/@img/sharp-win32-x64/package.json',
   'cli/node_modules/@img/colour/package.json',
@@ -141,6 +143,7 @@ if (
 ) { throw 'Canonical release validator provenance does not match its lock' }
 
 $ExpectedRuntimePackages = [ordered]@{
+  '@mywallpaper/sdk' = '0.1.0'
   'sharp' = '0.35.3'
   '@img/sharp-win32-x64' = '0.35.3'
   '@img/colour' = '1.1.0'

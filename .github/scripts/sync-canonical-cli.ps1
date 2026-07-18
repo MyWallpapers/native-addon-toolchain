@@ -84,7 +84,7 @@ function Assert-PackageIdentity([string]$Root, [string]$ExpectedName, [string]$E
 
 try {
   $CliRoot = Join-Path $MyWallpaperRoot 'packages/cli'
-  $RuntimeRoot = Join-Path $MyWallpaperRoot 'packages/runtime-kernel'
+  $SdkRoot = Join-Path $MyWallpaperRoot 'packages/sdk-public'
   Copy-RegularTree (Join-Path $CliRoot 'release-dist') (Join-Path $Staging 'cli/dist')
   New-Item -ItemType Directory -Path (Join-Path $Staging 'cli') -Force | Out-Null
   [ordered]@{
@@ -94,15 +94,13 @@ try {
   } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Staging 'cli/package.json') -Encoding utf8NoBOM
   Copy-Item -LiteralPath (Join-Path $CliRoot 'LICENSE') -Destination (Join-Path $Staging 'cli/LICENSE')
 
-  $RuntimeDestination = Join-Path $Staging 'cli/node_modules/@mywallpaper/runtime-kernel'
-  New-Item -ItemType Directory -Path $RuntimeDestination -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'package.json') -Destination (Join-Path $RuntimeDestination 'package.json')
-  Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'LICENSE') -Destination (Join-Path $RuntimeDestination 'LICENSE')
-  Copy-RegularTree (Join-Path $RuntimeRoot 'dist/addon-schema') (Join-Path $RuntimeDestination 'dist/addon-schema') '*.js'
-  New-Item -ItemType Directory -Path (Join-Path $RuntimeDestination 'dist/protocol') -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'dist/protocol/index.js') -Destination (Join-Path $RuntimeDestination 'dist/protocol/index.js')
-  New-Item -ItemType Directory -Path (Join-Path $RuntimeDestination 'dist/generated') -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'dist/generated/addon-manifest-validator.generated.js') -Destination (Join-Path $RuntimeDestination 'dist/generated/addon-manifest-validator.generated.js')
+  $SdkDestination = Join-Path $Staging 'cli/node_modules/@mywallpaper/sdk'
+  New-Item -ItemType Directory -Path $SdkDestination -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $SdkRoot 'package.json') -Destination (Join-Path $SdkDestination 'package.json')
+  Copy-Item -LiteralPath (Join-Path $SdkRoot 'LICENSE') -Destination (Join-Path $SdkDestination 'LICENSE')
+  Copy-RegularTree (Join-Path $SdkRoot 'dist/addon-schema') (Join-Path $SdkDestination 'dist/addon-schema') '*.js'
+  Copy-RegularTree (Join-Path $SdkRoot 'dist/protocol') (Join-Path $SdkDestination 'dist/protocol') '*.js'
+  Copy-RegularTree (Join-Path $SdkRoot 'dist/generated') (Join-Path $SdkDestination 'dist/generated') '*.js'
 
   $SharpRoot = Resolve-NodePackageRoot $CliRoot 'sharp'
   $SharpNodeModules = Split-Path -Parent $SharpRoot
