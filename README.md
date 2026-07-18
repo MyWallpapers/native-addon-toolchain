@@ -6,8 +6,8 @@ SHA. End users never run this toolchain and never compile add-on code.
 
 The workflow builds one release bundle from the exact Git tag:
 
-1. build web and companion outputs twice in independent jobs on the dedicated
-   `mywallpaper-native-build` Windows x64 pool, and build hooks in a separate job;
+1. build web and companion outputs twice in independent, disposable
+   GitHub-hosted Windows 2025 VMs, and build hooks in a separate disposable VM;
 2. install the locked JavaScript dependency graph only on the web VM;
 3. build hooks without running npm lifecycle scripts or companion build code;
 4. transfer only those untrusted outputs to a distinct verification job
@@ -35,12 +35,11 @@ extracts add-on source. Development and production use separate hardcoded
 endpoints and audiences; a caller can choose the channel, but cannot supply an
 upload URL.
 
-The current self-hosted pool is restricted to organization-owned repositories
-and same-repository pull requests. It is suitable for the private development
-phase and the two maintained test add-ons. Before accepting arbitrary public
-repositories, every build job must run on an ephemeral Windows instance restored
-from a clean image; separate jobs on one persistent host are not a machine-level
-isolation boundary.
+Caller-controlled source never runs on a persistent MyWallpaper machine. Every
+build and verification job starts on a new GitHub-hosted Windows image and has no
+OIDC permission. The only OIDC-capable publisher job receives the final ZIP as
+opaque data, verifies its expected size and SHA-256, and never checks out or
+extracts caller source.
 
 ## Caller
 
@@ -72,9 +71,11 @@ jobs:
 The tag must equal the normalized manifest SemVer, optionally prefixed by
 `v`. Publication creates a short-lived candidate while MyWallpaper applies the
 same automatic schema, inventory, provenance and byte-integrity preflight to
-Canvas-only, companion and hook releases. A valid release then becomes
-available atomically. Recommendation is always a separate owner action and
-clients never auto-update.
+Canvas-only, companion and hook releases. Native releases remain candidates
+until a separate MyWallpaper admission worker reproduces the exact bytes in an
+isolated, credential-free environment. A valid release then becomes available
+atomically. The first admitted release is selected automatically when the add-on
+has no recommendation; later recommendation changes remain an owner action.
 
 Every release carries a regular root `LICENSE` file containing non-empty,
 NUL-free UTF-8 text (maximum 1 MiB). It is hashed in the immutable bundle
