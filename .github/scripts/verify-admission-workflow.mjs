@@ -123,7 +123,8 @@ for (const [name, value] of [['build', build], ['verifier', verifier], ['publish
   requireText(value, "RUNNER_ENVIRONMENT: ${{ runner.environment }}", `${name} GitHub-hosted runner observation`)
   requireText(value, "-cne 'github-hosted'", `${name} fail-closed runner guard`)
 }
-if (build.match(/runs-on:/gu)?.length !== 1 || !build.includes('matrix:\n        replica: [1, 2]')) {
+if (build.match(/runs-on:/gu)?.length !== 1
+  || !/matrix:\r?\n        replica: \[1, 2\]/u.test(build)) {
   fail('Build boundary must remain one two-replica matrix job.')
 }
 for (const component of ['web', 'companion', 'hooks']) {
