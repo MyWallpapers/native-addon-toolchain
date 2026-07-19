@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'release-artifact-contract.ps1')
+. (Join-Path $PSScriptRoot 'github-api-contract.ps1')
 $ApiVersion = '2026-03-10'
 $SemVerTagPattern = '^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
 $Headers = @{
@@ -91,9 +92,10 @@ function Get-ReleasesForTag() {
   $matches = [Collections.Generic.List[object]]::new()
   $page = 1
   while ($true) {
-    $items = @(Invoke-GitHubGet `
+    $response = Invoke-GitHubGet `
       "https://api.github.com/repos/$Repository/releases?per_page=100&page=$page" `
-      'GitHub release listing')
+      'GitHub release listing'
+    $items = ConvertTo-GitHubApiItemList -Response $response -Label 'GitHub release listing'
     foreach ($item in $items) {
       if ([string]$item.tag_name -ceq $TagName) { $matches.Add($item) }
     }
@@ -108,9 +110,10 @@ function Get-ReleaseAssets([string]$ReleaseId) {
   $assets = [Collections.Generic.List[object]]::new()
   $page = 1
   while ($true) {
-    $items = @(Invoke-GitHubGet `
+    $response = Invoke-GitHubGet `
       "https://api.github.com/repos/$Repository/releases/$ReleaseId/assets?per_page=100&page=$page" `
-      'GitHub release asset listing')
+      'GitHub release asset listing'
+    $items = ConvertTo-GitHubApiItemList -Response $response -Label 'GitHub release asset listing'
     foreach ($item in $items) { $assets.Add($item) }
     if ($items.Count -lt 100) { break }
     if ($page -eq [int]::MaxValue) { throw 'GitHub release asset pagination overflowed' }

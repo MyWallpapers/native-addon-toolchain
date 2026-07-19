@@ -48,6 +48,8 @@ jobs:
             '.github/scripts/admission-evidence.integration.test.ps1',
             '.github/scripts/expand-canonical-cli.ps1',
             '.github/scripts/finalize-immutable-release.ps1',
+            '.github/scripts/github-api-contract.ps1',
+            '.github/scripts/github-api-contract.test.ps1',
             '.github/scripts/materialize-addon-build.ps1',
             '.github/scripts/package-admission-materials.ps1',
             '.github/scripts/package-admission-materials.test.ps1',
@@ -74,6 +76,7 @@ jobs:
           node --test .github/scripts/admission-environment.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 environment tests failed' }
           & .github/scripts/package-admission-materials.test.ps1
+          & .github/scripts/github-api-contract.test.ps1
           & .github/scripts/split-release-artifact.test.ps1
           & .github/scripts/admission-evidence.integration.test.ps1
 

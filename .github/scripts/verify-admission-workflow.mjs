@@ -83,7 +83,14 @@ for (const [text, label] of [
   [releasePreparer, 'release preparer'],
   [assetPublisher, 'asset publisher'],
   [releaseFinalizer, 'release finalizer'],
-]) requireText(text, '2026-03-10', `${label} GitHub API version`)
+]) {
+  requireText(text, '2026-03-10', `${label} GitHub API version`)
+  requireText(text, 'github-api-contract.ps1', `${label} JSON-array normalization contract`)
+  requireText(text, 'ConvertTo-GitHubApiItemList', `${label} paginated JSON-array normalization`)
+  if (/@\(\s*Invoke-GitHubGet/iu.test(text)) {
+    fail(`${label} must not directly wrap Invoke-RestMethod JSON arrays in @(...).`)
+  }
+}
 if (/-Method\s+(?:Delete|Patch)\b/iu.test(assetPublisher)) {
   fail('GitHub Release asset publication must never delete or overwrite an asset.')
 }
