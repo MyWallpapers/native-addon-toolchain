@@ -127,11 +127,12 @@ if ($ToolsetVersion -cnotmatch '^[0-9]+(?:\.[0-9]+){1,3}$') {
   throw 'MSVC toolset version is invalid'
 }
 $MsvcLinker = Join-Path $VsInstallation "VC/Tools/MSVC/$ToolsetVersion/bin/Hostx64/x64/link.exe"
-$MsvcLinkerHelp = Invoke-Version $MsvcLinker @('/?') 'MSVC linker' @(0, 1104)
-$MsvcVersionMatch = [regex]::Match($MsvcLinkerHelp, 'Version\s+([0-9]+(?:\.[0-9]+){1,3})')
+$MsvcVersionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($MsvcLinker)
+$MsvcProductVersion = Get-CleanLine $MsvcVersionInfo.ProductVersion 'MSVC linker product version'
+$MsvcVersionMatch = [regex]::Match($MsvcProductVersion, '([0-9]+(?:\.[0-9]+){1,3})')
 if (-not $MsvcVersionMatch.Success) { throw 'MSVC linker version could not be parsed' }
 $MsvcFileVersion = Get-CleanLine `
-  ([Diagnostics.FileVersionInfo]::GetVersionInfo($MsvcLinker).FileVersion) `
+  $MsvcVersionInfo.FileVersion `
   'MSVC linker file version'
 
 $WindowsKitsRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10'
