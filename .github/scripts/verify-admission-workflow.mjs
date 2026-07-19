@@ -61,6 +61,10 @@ const artifactVerifier = await readFile(
   resolve(dirname(path), '../scripts/verify-release-artifact-parts.ps1'),
   'utf8',
 )
+const releaseOnMainVerifier = await readFile(
+  resolve(dirname(path), '../scripts/assert-release-on-default-branch.mjs'),
+  'utf8',
+)
 const pushTagGuard = "github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')"
 requireText(workflow, 'name: MyWallpaper add-on admission-v1', 'the versioned contract name')
 requireText(workflow, 'workflow_call:', 'the reusable workflow trigger')
@@ -178,6 +182,48 @@ for (const [name, value] of [['build', build], ['verifier', verifier], ['publish
   requireText(value, "RUNNER_ENVIRONMENT: ${{ runner.environment }}", `${name} GitHub-hosted runner observation`)
   requireText(value, "-cne 'github-hosted'", `${name} fail-closed runner guard`)
 }
+const mainGuardCommand = 'node toolchain/.github/scripts/assert-release-on-default-branch.mjs'
+if ((workflow.split(mainGuardCommand).length - 1) !== 2) {
+  fail('Admission must check reviewed default-branch ancestry in each replica and again before publication.')
+}
+const buildMainGuardIndex = build.indexOf(mainGuardCommand)
+const firstCallerExecutionIndex = build.indexOf('Build hooks from a pristine checkout without registry code')
+if (buildMainGuardIndex < 0 || firstCallerExecutionIndex <= buildMainGuardIndex) {
+  fail('Reviewed default-branch ancestry must be proven before any caller code is built.')
+}
+const publisherMainGuardIndex = publisher.indexOf(mainGuardCommand)
+const draftReleaseIndex = publisher.indexOf('Create or reuse the exact controlled GitHub draft release')
+if (publisherMainGuardIndex < 0 || draftReleaseIndex <= publisherMainGuardIndex) {
+  fail('Reviewed default-branch ancestry must be reconfirmed immediately before release publication.')
+}
+if ((workflow.match(/MYWALLPAPER_GITHUB_TOKEN: \$\{\{ github\.token \}\}/gu) ?? []).length !== 2) {
+  fail('Reviewed default-branch checks must use only the job-scoped GitHub token.')
+}
+const buildMainGuardStep = section(
+  build,
+  '      - name: Require the tagged release commit on the reviewed default branch',
+  '      - name: Verify and expand canonical MyWallpaper CLI',
+)
+const publisherMainGuardStep = section(
+  publisher,
+  '      - name: Reconfirm the tagged release commit on the reviewed default branch',
+  '      - name: Create or reuse the exact controlled GitHub draft release',
+)
+for (const [value, label] of [
+  [buildMainGuardStep, 'replica reviewed default-branch check'],
+  [publisherMainGuardStep, 'publisher reviewed default-branch check'],
+]) {
+  requireText(value, '--repository-id "$env:GITHUB_REPOSITORY_ID"', `${label} numeric identity binding`)
+}
+for (const [fragment, label] of [
+  ["const defaultBranch = metadata.default_branch", 'public default-branch binding'],
+  ["encodeURIComponent(defaultBranch)", 'default-branch URL encoding'],
+  ["defaultReference?.ref !== `refs/heads/${defaultBranch}`", 'exact default-branch ref binding'],
+  ["String(metadata.id) !== repositoryId", 'numeric repository identity binding'],
+  ["redirect: 'error'", 'redirect refusal'],
+  ["comparison.merge_base_commit?.sha !== commitSha", 'merge-base ancestry proof'],
+  ["comparison.behind_by !== 0", 'behind/diverged comparison refusal'],
+]) requireText(releaseOnMainVerifier, fragment, label)
 if (build.match(/runs-on:/gu)?.length !== 1
   || !/matrix:\r?\n        replica: \[1, 2\]/u.test(build)) {
   fail('Build boundary must remain one two-replica matrix job.')
