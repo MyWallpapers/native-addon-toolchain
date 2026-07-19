@@ -6,6 +6,7 @@ $splitter = Join-Path $PSScriptRoot 'split-release-artifact.ps1'
 $verifier = Join-Path $PSScriptRoot 'verify-release-artifact-parts.ps1'
 $temporary = Join-Path ([IO.Path]::GetTempPath()) "mywallpaper-release-parts-test-$PID-$([Guid]::NewGuid().ToString('N'))"
 $originalGithubOutput = $env:GITHUB_OUTPUT
+$originalLastExitCode = $global:LASTEXITCODE
 try {
   New-Item -ItemType Directory -Path $temporary | Out-Null
   $env:GITHUB_OUTPUT = Join-Path $temporary 'github-output.txt'
@@ -17,12 +18,22 @@ try {
 
   $first = Join-Path $temporary 'first'
   $second = Join-Path $temporary 'second'
-  & $splitter -SourcePath $source -Kind bundle -ExpectedDigest $digest -ExpectedSize $bytes.Length `
-    -OutputRoot $first -PartSizeBytes 10 -OperationalMaxParts 10 | Out-Null
+  $global:LASTEXITCODE = 23
+  $firstJson = & $splitter -SourcePath $source -Kind bundle -ExpectedDigest $digest `
+    -ExpectedSize $bytes.Length -OutputRoot $first -PartSizeBytes 10 -OperationalMaxParts 10
+  $firstResult = $firstJson | ConvertFrom-Json
+  if ($firstResult.rootDigest -cne $digest -or $firstResult.partCount -ne 4) {
+    throw 'Release artifact splitter did not return its successful structured result'
+  }
   & $splitter -SourcePath $source -Kind bundle -ExpectedDigest $digest -ExpectedSize $bytes.Length `
     -OutputRoot $second -PartSizeBytes 10 -OperationalMaxParts 10 | Out-Null
-  & $verifier -TransportRoot $first -Kind bundle -ExpectedDigest $digest -ExpectedSize $bytes.Length `
-    -OperationalMaxParts 10 | Out-Null
+  $global:LASTEXITCODE = 29
+  $verificationJson = & $verifier -TransportRoot $first -Kind bundle -ExpectedDigest $digest `
+    -ExpectedSize $bytes.Length -OperationalMaxParts 10
+  $verification = $verificationJson | ConvertFrom-Json
+  if ($verification.rootDigest -cne $digest -or $verification.partCount -ne 4) {
+    throw 'Release artifact verifier did not return its successful structured result'
+  }
   & $verifier -TransportRoot $second -Kind bundle -ExpectedDigest $digest -ExpectedSize $bytes.Length `
     -OperationalMaxParts 10 | Out-Null
 
@@ -95,5 +106,6 @@ try {
   if (-not $rejectedPartBudget) { throw 'Release artifact splitter ignored the part-count budget' }
 } finally {
   $env:GITHUB_OUTPUT = $originalGithubOutput
+  $global:LASTEXITCODE = $originalLastExitCode
   Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
 }
