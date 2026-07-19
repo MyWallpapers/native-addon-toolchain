@@ -45,6 +45,14 @@ const nativeEvidenceGenerator = await readFile(
   resolve(dirname(path), '../scripts/create-native-build-evidence.mjs'),
   'utf8',
 )
+const runnerObservationGenerator = await readFile(
+  resolve(dirname(path), '../scripts/runner-observation.mjs'),
+  'utf8',
+)
+const runnerObservationCollector = await readFile(
+  resolve(dirname(path), '../scripts/record-replica-observation.ps1'),
+  'utf8',
+)
 const artifactSplitter = await readFile(
   resolve(dirname(path), '../scripts/split-release-artifact.ps1'),
   'utf8',
@@ -122,6 +130,25 @@ requireText(
   "uri: 'mywallpaper:native-companion-build-config'",
   'committed companion command/config provenance',
 )
+requireText(
+  evidenceGenerator,
+  'Volatile runner observations must remain outside immutable admission materials.',
+  'volatile runner-observation separation',
+)
+requireText(
+  runnerObservationGenerator,
+  "contract: 'github-hosted-runner-observation-v1'",
+  'the versioned runner-observation predicate',
+)
+for (const [fragment, label] of [
+  ["'ImageOS'", 'build-runner ImageOS observation'],
+  ["'ImageVersion'", 'build-runner ImageVersion observation'],
+  ["@('-vV')", 'rustc verbose-version observation'],
+  ["@('-Vv')", 'cargo verbose-version observation'],
+  ["'MSVC linker version could not be parsed'", 'MSVC linker observation'],
+  ["'No complete Windows SDK was observed'", 'Windows SDK observation'],
+  ["'bin/ld.lld.exe'", 'pinned Windhawk linker observation'],
+]) requireText(runnerObservationCollector, fragment, label)
 
 const build = section(workflow, '  build-untrusted:', '  verify-package:')
 const verifier = section(workflow, '  verify-package:', '  attest-publish:')
@@ -181,7 +208,23 @@ requireText(
   'the exact bundle attestation digest',
 )
 const attestations = publisher.match(/uses: actions\/attest@/gu) ?? []
-if (attestations.length !== 1) fail('The release ZIP must be the only workflow-generated build attestation subject.')
+if (attestations.length !== 2) {
+  fail('The release ZIP must have exactly one build-provenance and one runner-observation attestation.')
+}
+requireText(
+  publisher,
+  'predicate-type: https://mywallpaper.online/predicates/github-hosted-runner-observation/v1',
+  'the custom runner-observation predicate type',
+)
+requireText(
+  publisher,
+  'predicate-path: ${{ steps.runner-observation.outputs.predicate }}',
+  'the verified runner-observation predicate path',
+)
+if ((publisher.match(/subject-name: mywallpaper-addon-bundle\.zip/gu) ?? []).length !== 2
+  || (publisher.match(/subject-digest: \$\{\{ needs\.verify-package\.outputs\.archive-sha256 \}\}/gu) ?? []).length !== 2) {
+  fail('Both attestations must bind the exact same logical bundle digest.')
+}
 if (publisher.includes('subject-attestation') || publisher.includes('materials-attestation')) {
   fail('Admission subject and materials must be submitted to the finalizer, not separately attested.')
 }
@@ -220,7 +263,7 @@ if (publisher.includes('MultipartFormDataContent') || publisher.includes("-Conte
 }
 const draftIndex = publisher.indexOf('Create or reuse the exact controlled GitHub draft release')
 const attestIndex = publisher.indexOf('uses: actions/attest@')
-const proofIndex = publisher.indexOf('Verify the GitHub/Sigstore proof before admission OIDC')
+const proofIndex = publisher.indexOf('Verify both GitHub/Sigstore proofs before admission OIDC')
 const assetIndex = publisher.indexOf('Publish immutable content-addressed GitHub Release assets')
 const immutableIndex = publisher.indexOf('Publish and cryptographically lock the GitHub Release')
 const ingestionIndex = publisher.indexOf('Publish the immutable release through GitHub OIDC')
