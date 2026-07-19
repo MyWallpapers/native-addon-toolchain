@@ -1,4 +1,4 @@
-name: MyWallpaper add-on release
+name: MyWallpaper add-on admission-v1
 
 on:
   workflow_call:
@@ -12,13 +12,13 @@ on:
 permissions: {}
 
 jobs:
-  build-web-untrusted:
-    name: Build untrusted web source (${{ matrix.replica }}/2)
-    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    # Caller-controlled source is compiled only on a fresh GitHub-hosted VM.
-    # No persistent MyWallpaper runner is allowed to execute add-on code.
+  build-untrusted:
+    name: Rebuild untrusted release (${{ matrix.replica }}/2)
+    if: github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    # Each replica is a fresh GitHub-hosted VM. Native outputs are uploaded
+    # before registry-installed web dependencies are ever executed.
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -26,12 +26,14 @@ jobs:
       matrix:
         replica: [1, 2]
     steps:
-      - name: Checkout immutable caller commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.sha }}
-          path: caller
-          persist-credentials: false
+      - name: Verify GitHub-hosted build boundary
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+            throw 'admission-v1 never executes caller code on a self-hosted runner'
+          }
 
       - name: Checkout the exact called workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -52,30 +54,134 @@ jobs:
           if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
           if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
           if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
-          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
+          $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
+          if ($env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
+            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          }
           $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
           if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
+
+      - name: Record trusted replica runner observations
+        shell: pwsh
+        env:
+          REPLICA: ${{ matrix.replica }}
+          RUNNER_ARCHITECTURE: ${{ runner.arch }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          RUNNER_OPERATING_SYSTEM: ${{ runner.os }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          $metadata = [ordered]@{
+            schemaVersion = 1
+            replica = [int]$env:REPLICA
+            runner = [ordered]@{
+              environment = $env:RUNNER_ENVIRONMENT
+              label = 'windows-2025'
+              operatingSystem = $env:RUNNER_OPERATING_SYSTEM
+              architecture = $env:RUNNER_ARCHITECTURE
+            }
+            workflowSha = $env:WORKFLOW_SHA
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'mywallpaper-replica-observation'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $metadata | ConvertTo-Json -Depth 8 -Compress |
+            Set-Content -LiteralPath "$root/replica.json" -Encoding utf8NoBOM
+
+      - name: Transfer trusted replica observation before caller code
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-replica-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-replica-observation/replica.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Checkout immutable caller commit for hooks
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: caller-hooks
+          persist-credentials: false
+
+      - name: Checkout immutable caller commit for companions
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: caller-companion
+          persist-credentials: false
+
+      - name: Checkout immutable caller commit for web
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: caller-web
+          persist-credentials: false
 
       - name: Set up pinned Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: toolchain/.nvmrc
 
+      - name: Verify and expand canonical MyWallpaper CLI
+        shell: pwsh
+        run: |
+          & toolchain/.github/scripts/expand-canonical-cli.ps1 `
+            -ArtifactRoot toolchain/.github/canonical-cli `
+            -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
+
+      - name: Build hooks from a pristine checkout without registry code
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-hooks-output'
+          Remove-Item -LiteralPath caller-hooks/native/generated -Recurse -Force -ErrorAction SilentlyContinue
+          node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller-hooks
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
+          & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
+            -RepositoryRoot caller-hooks `
+            -OutputRoot $output
+
+      - name: Transfer hooks before any other caller build command
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-hooks-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-hooks-output
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Build declared native companions from a separate checkout
+        shell: pwsh
+        run: |
+          node toolchain/.github/scripts/build-native-companions.mjs `
+            --repository-root caller-companion `
+            --output-root "$env:RUNNER_TEMP/mywallpaper-companion-output"
+
+      - name: Transfer companions before registry-installed web code
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-companion-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-companion-output
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+          retention-days: 1
+
       - name: Build the exact web release without credentials
         shell: pwsh
-        working-directory: caller
+        working-directory: caller-web
         env:
           CI: 'true'
           RELEASE_REF_TYPE: ${{ github.ref_type }}
         run: |
-          if ($env:RELEASE_REF_TYPE -ne 'tag') { throw 'Add-on releases are built only from an immutable Git tag' }
+          if ($env:RELEASE_REF_TYPE -ne 'tag') { throw 'Add-on releases are built only from a Git tag' }
           corepack enable pnpm
           if ($LASTEXITCODE -ne 0) { throw 'Could not enable the pinned pnpm package manager' }
           pnpm install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'The frozen JavaScript dependency install failed' }
           pnpm typecheck
           if ($LASTEXITCODE -ne 0) { throw 'Add-on typecheck failed' }
+          pnpm run --if-present test
+          if ($LASTEXITCODE -ne 0) { throw 'Add-on test suite failed' }
           pnpm build
           if ($LASTEXITCODE -ne 0) { throw 'Add-on web build failed' }
 
@@ -85,7 +191,7 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-web-output'
           Remove-Item -LiteralPath $output -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$output/web" | Out-Null
-          Copy-Item -LiteralPath caller/dist -Destination "$output/web/dist" -Recurse -Force
+          Copy-Item -LiteralPath caller-web/dist -Destination "$output/web/dist" -Recurse -Force
 
       - name: Transfer only the untrusted web output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -97,119 +203,35 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-  build-native-untrusted:
-    name: Build untrusted native ${{ matrix.component }} (${{ matrix.replica }}/${{ matrix.replicas }})
-    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: windows-2025
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: hooks
-            replica: 1
-            replicas: 1
-          - component: companion
-            replica: 1
-            replicas: 2
-          - component: companion
-            replica: 2
-            replicas: 2
-    steps:
-      - name: Checkout immutable caller commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.sha }}
-          path: caller
-          persist-credentials: false
-
-      - name: Checkout the exact called workflow revision
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: toolchain
-          persist-credentials: false
-
-      - name: Verify called workflow identity
-        shell: pwsh
-        env:
-          WORKFLOW_FILE: ${{ job.workflow_file_path }}
-          WORKFLOW_REF: ${{ job.workflow_ref }}
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
-          if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
-          if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
-          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
-          $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
-          if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
-
-      - name: Set up pinned Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: toolchain/.nvmrc
-
-      - name: Verify and expand canonical MyWallpaper CLI
-        if: matrix.component == 'hooks'
-        shell: pwsh
-        run: |
-          & toolchain/.github/scripts/expand-canonical-cli.ps1 `
-            -ArtifactRoot toolchain/.github/canonical-cli `
-            -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
-
-      - name: Build one isolated native component without credentials
-        shell: pwsh
-        env:
-          NATIVE_COMPONENT: ${{ matrix.component }}
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP "mywallpaper-$env:NATIVE_COMPONENT-output"
-          switch ($env:NATIVE_COMPONENT) {
-            'hooks' {
-              Remove-Item -LiteralPath caller/native/generated -Recurse -Force -ErrorAction SilentlyContinue
-              node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller
-              if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
-              & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
-                -RepositoryRoot caller `
-                -OutputRoot $output
-            }
-            'companion' {
-              node toolchain/.github/scripts/build-native-companions.mjs `
-                --repository-root caller `
-                --output-root $output
-            }
-            default { throw 'Unexpected native build component' }
-          }
-
-      - name: Transfer one isolated native output
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mywallpaper-${{ matrix.component }}-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mywallpaper-${{ matrix.component }}-output
-          if-no-files-found: error
-          compression-level: 0
-          include-hidden-files: true
-          retention-days: 1
-
   verify-package:
     name: Verify and package on a fresh runner
-    needs: [build-web-untrusted, build-native-untrusted]
-    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
+    needs: build-untrusted
+    if: github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       actions: read
       contents: read
     outputs:
-      archive-name: ${{ steps.package.outputs.archive-name }}
       archive-sha256: ${{ steps.package.outputs.archive-sha256 }}
       archive-size: ${{ steps.package.outputs.archive-size }}
       distribution-digest: ${{ steps.package.outputs.distribution-digest }}
+      admission-artifact-name: ${{ steps.proof.outputs.artifact-name }}
+      bundle-transport-artifact-name: ${{ steps.transport.outputs.bundle-artifact-name }}
+      materials-transport-artifact-name: ${{ steps.transport.outputs.materials-artifact-name }}
+      admission-subject-sha256: ${{ steps.evidence.outputs.subject-sha256 }}
+      admission-materials-sha256: ${{ steps.materials.outputs.materials-sha256 }}
+      admission-materials-size: ${{ steps.materials.outputs.materials-size }}
     steps:
+      - name: Verify GitHub-hosted verification boundary
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+            throw 'admission-v1 verification requires a GitHub-hosted runner'
+          }
+
       - name: Checkout immutable caller commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -236,8 +258,10 @@ jobs:
           if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
           if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
           if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
-          $expectedRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-          if ($env:WORKFLOW_REF -cne $expectedRef) { throw 'Caller must reference the reusable workflow by its full commit SHA' }
+          $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
+          if ($env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
+            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          }
           $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
           if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
 
@@ -277,11 +301,24 @@ jobs:
           name: mywallpaper-companion-2-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mywallpaper-build-reproduction/companion
 
-      - name: Download hook output without executing it
+      - name: Download primary hook output without executing it
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mywallpaper-hooks-1-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mywallpaper-build-output/hooks
+
+      - name: Download reproduced hook output without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mywallpaper-hooks-2-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-build-reproduction/hooks
+
+      - name: Download trusted replica observations
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mywallpaper-replica-*-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-replica-observations
+          merge-multiple: false
 
       - name: Validate and create the deterministic bundle
         id: package
@@ -292,8 +329,9 @@ jobs:
           CALLER_REPOSITORY_NAME: ${{ github.event.repository.name }}
           CALLER_REPOSITORY_OWNER: ${{ github.repository_owner }}
           CALLER_REF_TYPE: ${{ github.ref_type }}
-          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
-          CALLER_RUN_ID: ${{ github.run_id }}
+          OPERATIONAL_MAX_ARCHIVE_BYTES: '4294967296'
+          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
+          OPERATIONAL_MAX_FILES: '100000'
         run: |
           if ($env:CALLER_REF_TYPE -ne 'tag') { throw 'Add-on releases require a Git tag' }
           $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-output'
@@ -336,9 +374,12 @@ jobs:
           }
           Assert-ByteIdentical "$output/web" "$reproduction/web" 'Web build'
           Assert-ByteIdentical "$output/companion" "$reproduction/companion" 'Native companion build'
+          Assert-ByteIdentical "$output/hooks" "$reproduction/hooks" 'Windhawk hook build'
           & toolchain/.github/scripts/materialize-addon-build.ps1 `
             -BuildRoot $output `
-            -RepositoryRoot caller
+            -RepositoryRoot caller `
+            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
+            -OperationalMaxBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller
           if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check --json --directory caller
@@ -348,13 +389,8 @@ jobs:
           git -C caller diff --exit-code -- . ':(exclude)dist/**' ':(exclude)native/out/**' ':(exclude)native/generated/**'
           if ($LASTEXITCODE -ne 0) { throw 'Generated add-on bindings are stale' }
 
-          $rebuiltHooks = Join-Path $env:RUNNER_TEMP 'mywallpaper-hooks-rebuilt'
-          & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
-            -RepositoryRoot caller `
-            -OutputRoot $rebuiltHooks
-          Assert-ByteIdentical "$output/hooks" $rebuiltHooks 'Windhawk hook build'
-
           $archive = Join-Path $env:RUNNER_TEMP 'mywallpaper-addon-bundle.zip'
+          $metadataRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-metadata'
           & toolchain/.github/scripts/package-addon-bundle.ps1 `
             -RepositoryRoot caller `
             -CompanionRoot "$output/companion" `
@@ -363,31 +399,217 @@ jobs:
             -RepositoryOwner $env:CALLER_REPOSITORY_OWNER `
             -RepositoryName $env:CALLER_REPOSITORY_NAME `
             -CommitSha $env:CALLER_COMMIT_SHA `
-            -OutputArchive $archive
+            -OutputArchive $archive `
+            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
+            -OperationalMaxExpandedBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
+            -OperationalMaxArchiveBytes $env:OPERATIONAL_MAX_ARCHIVE_BYTES `
+            -AdmissionMetadataRoot $metadataRoot
           "archive=$archive" >> $env:GITHUB_OUTPUT
-          "archive-name=mywallpaper-addon-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+          "metadata-root=$metadataRoot" >> $env:GITHUB_OUTPUT
 
-      - name: Transfer one immutable bundle to the isolated publisher
+      - name: Create admission-v1 subject, provenance and SBOM
+        id: evidence
+        shell: pwsh
+        env:
+          CALLER_COMMIT_SHA: ${{ github.sha }}
+          CALLER_REF: ${{ github.ref }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
+          OPERATIONAL_MAX_FILES: '100000'
+          OPERATIONAL_MAX_METADATA_BYTES: '536870912'
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-evidence'
+          $summaryJson = node toolchain/.github/scripts/create-admission-evidence.mjs `
+            --repository-root caller `
+            --primary-root "$env:RUNNER_TEMP/mywallpaper-build-output" `
+            --reproduction-root "$env:RUNNER_TEMP/mywallpaper-build-reproduction" `
+            --replica-observations-root "$env:RUNNER_TEMP/mywallpaper-replica-observations" `
+            --bundle-index "${{ steps.package.outputs.metadata-root }}/bundle-index.json" `
+            --payload-inventory "${{ steps.package.outputs.metadata-root }}/bundle-payload-inventory.json" `
+            --archive "${{ steps.package.outputs.archive }}" `
+            --toolchain-root toolchain `
+            --repository-id $env:CALLER_REPOSITORY_ID `
+            --repository-name $env:CALLER_REPOSITORY `
+            --commit-sha $env:CALLER_COMMIT_SHA `
+            --release-ref $env:CALLER_REF `
+            --workflow-ref $env:WORKFLOW_REF `
+            --workflow-sha $env:WORKFLOW_SHA `
+            --operational-max-files $env:OPERATIONAL_MAX_FILES `
+            --operational-max-expanded-bytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
+            --operational-max-metadata-bytes $env:OPERATIONAL_MAX_METADATA_BYTES `
+            --output-root $evidenceRoot
+          if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence generation failed' }
+          $summary = $summaryJson | ConvertFrom-Json
+          if ($summary.archiveDigest -cne '${{ steps.package.outputs.archive-sha256 }}') {
+            throw 'Admission subject archive digest differs from the verified bundle'
+          }
+          if ($summary.distributionDigest -cne '${{ steps.package.outputs.distribution-digest }}') {
+            throw 'Admission subject distribution digest differs from the verified bundle'
+          }
+          if ($summary.subjectDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw 'Admission subject digest is invalid'
+          }
+          "evidence-root=$evidenceRoot" >> $env:GITHUB_OUTPUT
+          "subject-path=$($summary.subjectPath)" >> $env:GITHUB_OUTPUT
+          "subject-sha256=$($summary.subjectDigest)" >> $env:GITHUB_OUTPUT
+
+      - name: Package deterministic admission materials
+        id: materials
+        shell: pwsh
+        env:
+          OPERATIONAL_MAX_ARCHIVE_BYTES: '4294967296'
+          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
+          OPERATIONAL_MAX_FILES: '100000'
+        run: |
+          & toolchain/.github/scripts/package-admission-materials.ps1 `
+            -EvidenceRoot "${{ steps.evidence.outputs.evidence-root }}" `
+            -OutputArchive "$env:RUNNER_TEMP/mywallpaper-admission-materials.zip" `
+            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
+            -OperationalMaxExpandedBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
+            -OperationalMaxArchiveBytes $env:OPERATIONAL_MAX_ARCHIVE_BYTES
+
+      - name: Split logical archives into deterministic release parts
+        id: transport
+        shell: pwsh
+        env:
+          CALLER_COMMIT_SHA: ${{ github.sha }}
+          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CALLER_RUN_ID: ${{ github.run_id }}
+          OPERATIONAL_MAX_RELEASE_ASSETS: '1000'
+          RELEASE_PART_SIZE_BYTES: '1073741824'
+        run: |
+          $bundleRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-bundle-transport'
+          $materialsRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-materials-transport'
+          $bundleJson = & toolchain/.github/scripts/split-release-artifact.ps1 `
+            -SourcePath '${{ steps.package.outputs.archive }}' `
+            -Kind bundle `
+            -ExpectedDigest '${{ steps.package.outputs.archive-sha256 }}' `
+            -ExpectedSize '${{ steps.package.outputs.archive-size }}' `
+            -OutputRoot $bundleRoot `
+            -PartSizeBytes $env:RELEASE_PART_SIZE_BYTES `
+            -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle release transport splitting failed' }
+          $bundle = $bundleJson | ConvertFrom-Json
+          $materialsJson = & toolchain/.github/scripts/split-release-artifact.ps1 `
+            -SourcePath "$env:RUNNER_TEMP/mywallpaper-admission-materials.zip" `
+            -Kind materials `
+            -ExpectedDigest '${{ steps.materials.outputs.materials-sha256 }}' `
+            -ExpectedSize '${{ steps.materials.outputs.materials-size }}' `
+            -OutputRoot $materialsRoot `
+            -PartSizeBytes $env:RELEASE_PART_SIZE_BYTES `
+            -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
+          if ($LASTEXITCODE -ne 0) { throw 'Materials release transport splitting failed' }
+          $materials = $materialsJson | ConvertFrom-Json
+          $totalParts = [long]$bundle.partCount + [long]$materials.partCount
+          if ($totalParts -lt 2 -or $totalParts -gt [long]$env:OPERATIONAL_MAX_RELEASE_ASSETS) {
+            throw 'Logical artifacts exceed GitHub release maximum 1000 assets'
+          }
+          "bundle-root=$bundleRoot" >> $env:GITHUB_OUTPUT
+          "materials-root=$materialsRoot" >> $env:GITHUB_OUTPUT
+          "bundle-artifact-name=mywallpaper-bundle-parts-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+          "materials-artifact-name=mywallpaper-materials-parts-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+
+      - name: Stage the public admission subject
+        id: proof
+        shell: pwsh
+        env:
+          CALLER_COMMIT_SHA: ${{ github.sha }}
+          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CALLER_RUN_ID: ${{ github.run_id }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-proof'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Copy-Item -LiteralPath '${{ steps.evidence.outputs.subject-path }}' -Destination "$root/admission-subject-v1.json"
+          "artifact-name=mywallpaper-admission-v1-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+
+      - name: Transfer deterministic bundle parts to the isolated publisher
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.package.outputs.archive-name }}
-          path: ${{ steps.package.outputs.archive }}
+          name: ${{ steps.transport.outputs.bundle-artifact-name }}
+          path: ${{ steps.transport.outputs.bundle-root }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
 
-  publish-oidc:
-    name: Attest and publish with OIDC only
+      - name: Transfer deterministic materials parts to the isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.transport.outputs.materials-artifact-name }}
+          path: ${{ steps.transport.outputs.materials-root }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Transfer public admission subject to the isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.proof.outputs.artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-admission-proof
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  attest-publish:
+    name: Attest, publish and finalize with OIDC
     needs: verify-package
-    if: github.event_name == 'release' && github.event.action == 'published' && github.ref_type == 'tag'
-    runs-on: windows-2025
-    timeout-minutes: 15
+    if: github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       actions: read
+      artifact-metadata: write
       attestations: write
-      contents: read
+      contents: write
       id-token: write
     steps:
+      - name: Verify GitHub-hosted admission identity
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          WORKFLOW_FILE: ${{ job.workflow_file_path }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+            throw 'admission-v1 publication requires a GitHub-hosted runner'
+          }
+          if ($env:WORKFLOW_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain') { throw 'Unexpected reusable-workflow repository' }
+          if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
+          if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
+          $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
+          if ($env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
+            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          }
+
+      - name: Checkout the trusted finalizer at the exact workflow SHA
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: toolchain
+          persist-credentials: false
+
+      - name: Verify the trusted finalizer checkout
+        shell: pwsh
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:WORKFLOW_SHA) {
+            throw 'Checked-out finalizer differs from job.workflow_sha'
+          }
+
+      - name: Set up pinned Node.js for trusted evidence code
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: toolchain/.nvmrc
+
       - name: Resolve the hardcoded publication endpoint
         id: publication
         shell: pwsh
@@ -397,48 +619,193 @@ jobs:
           switch ($env:PUBLICATION_CHANNEL) {
             'development' {
               'audience=mywallpaper-addon-release-development' >> $env:GITHUB_OUTPUT
-              'url=https://dev.mywallpaper.online/api/addon-releases' >> $env:GITHUB_OUTPUT
+              'finalizer-audience=mywallpaper-native-admission-development' >> $env:GITHUB_OUTPUT
+              'finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/releases' >> $env:GITHUB_OUTPUT
+              'url=https://dev.mywallpaper.online/api/internal/addon-release-ingestion' >> $env:GITHUB_OUTPUT
             }
             'production' {
               'audience=mywallpaper-addon-release-production' >> $env:GITHUB_OUTPUT
-              'url=https://mywallpaper.online/api/addon-releases' >> $env:GITHUB_OUTPUT
+              'finalizer-audience=mywallpaper-native-admission-production' >> $env:GITHUB_OUTPUT
+              'finalizer-base=https://mywallpaper.online/api/internal/native-admission/releases' >> $env:GITHUB_OUTPUT
+              'url=https://mywallpaper.online/api/internal/addon-release-ingestion' >> $env:GITHUB_OUTPUT
             }
             default { throw 'channel must be development or production' }
           }
 
-      - name: Download bundle without executing or extracting it
+      - name: Download bundle parts without executing or extracting them
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.verify-package.outputs.archive-name }}
-          path: ${{ runner.temp }}/mywallpaper-addon-publish
+          name: ${{ needs.verify-package.outputs.bundle-transport-artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-bundle-transport
 
-      - name: Verify the single immutable bundle
-        id: package
+      - name: Download materials parts without executing or extracting them
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.verify-package.outputs.materials-transport-artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-materials-transport
+
+      - name: Download admission subject without executing it
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.verify-package.outputs.admission-artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-admission-publish
+
+      - name: Reproduce both logical archives from deterministic parts
+        id: transport
         shell: pwsh
         env:
-          EXPECTED_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
-          EXPECTED_SIZE: ${{ needs.verify-package.outputs.archive-size }}
+          EXPECTED_BUNDLE_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
+          EXPECTED_BUNDLE_SIZE: ${{ needs.verify-package.outputs.archive-size }}
+          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
+          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
+          OPERATIONAL_MAX_RELEASE_ASSETS: '1000'
         run: |
-          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/mywallpaper-addon-publish" -File -Filter *.zip)
-          if ($archives.Count -ne 1) { throw "Expected exactly one add-on bundle, got $($archives.Count)" }
-          if ($archives[0].Length -ne [long]$env:EXPECTED_SIZE) { throw 'Publisher received a bundle with an unexpected size' }
-          $actual = 'sha256:' + (Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -cne $env:EXPECTED_SHA256) { throw 'Publisher received a bundle with an unexpected digest' }
-          "archive=$($archives[0].FullName)" >> $env:GITHUB_OUTPUT
+          $bundleJson = & toolchain/.github/scripts/verify-release-artifact-parts.ps1 `
+            -TransportRoot "$env:RUNNER_TEMP/mywallpaper-bundle-transport" `
+            -Kind bundle `
+            -ExpectedDigest $env:EXPECTED_BUNDLE_SHA256 `
+            -ExpectedSize $env:EXPECTED_BUNDLE_SIZE `
+            -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle part verification failed' }
+          $bundle = $bundleJson | ConvertFrom-Json
+          $materialsJson = & toolchain/.github/scripts/verify-release-artifact-parts.ps1 `
+            -TransportRoot "$env:RUNNER_TEMP/mywallpaper-materials-transport" `
+            -Kind materials `
+            -ExpectedDigest $env:EXPECTED_MATERIALS_SHA256 `
+            -ExpectedSize $env:EXPECTED_MATERIALS_SIZE `
+            -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
+          if ($LASTEXITCODE -ne 0) { throw 'Materials part verification failed' }
+          $materials = $materialsJson | ConvertFrom-Json
+          $totalParts = [long]$bundle.partCount + [long]$materials.partCount
+          if ($totalParts -lt 2 -or $totalParts -gt [long]$env:OPERATIONAL_MAX_RELEASE_ASSETS) {
+            throw 'Logical artifacts exceed GitHub release maximum 1000 assets'
+          }
+          "bundle-manifest=$($bundle.manifest)" >> $env:GITHUB_OUTPUT
+          "materials-manifest=$($materials.manifest)" >> $env:GITHUB_OUTPUT
 
-      - name: Attest the exact bundle
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.0.0
+      - name: Verify the admission subject as an opaque file
+        id: admission
+        shell: pwsh
+        env:
+          ARTIFACT_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
+          DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
+          EXPECTED_SUBJECT_SHA256: ${{ needs.verify-package.outputs.admission-subject-sha256 }}
+          WORKFLOW_FILE: ${{ job.workflow_file_path }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          $root = "$env:RUNNER_TEMP/mywallpaper-admission-publish"
+          $subjectPath = Join-Path $root 'admission-subject-v1.json'
+          $items = @(Get-ChildItem -LiteralPath $root -Force)
+          if ($items.Count -ne 1 -or @($items | Where-Object { $_.PSIsContainer }).Count -ne 0 -or
+              -not (Test-Path -LiteralPath $subjectPath -PathType Leaf)) {
+            throw 'Admission proof must contain exactly the admission subject'
+          }
+          $subjectDigest = 'sha256:' + (Get-FileHash -LiteralPath $subjectPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($subjectDigest -cne $env:EXPECTED_SUBJECT_SHA256) { throw 'Admission subject digest changed in transfer' }
+          $subject = Get-Content -LiteralPath $subjectPath -Raw | ConvertFrom-Json
+          if ($subject.schemaVersion -ne 1 -or $subject.contract -cne 'admission-v1' -or
+              $subject.workflow.repository -cne $env:WORKFLOW_REPOSITORY -or
+              $subject.workflow.path -cne $env:WORKFLOW_FILE -or
+              $subject.workflow.requestedRef -cne $env:WORKFLOW_REF -or
+              $subject.workflow.workflowSha -cne $env:WORKFLOW_SHA -or
+              $subject.source.repositoryId -cne "$env:GITHUB_REPOSITORY_ID" -or
+              $subject.source.repository -cne "$env:GITHUB_REPOSITORY" -or
+              $subject.source.commitSha -cne "$env:GITHUB_SHA" -or
+              $subject.source.ref -cne "$env:GITHUB_REF" -or
+              $subject.artifact.sha256 -cne $env:ARTIFACT_SHA256 -or
+              $subject.release.distributionDigest -cne $env:DISTRIBUTION_DIGEST -or
+              $subject.build.reproducible -ne $true -or @($subject.build.replicas).Count -ne 2) {
+            throw 'Admission subject does not bind the current release and workflow'
+          }
+          "subject=$subjectPath" >> $env:GITHUB_OUTPUT
+
+      - name: Create or reuse the exact controlled GitHub draft release
+        id: github-release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          & toolchain/.github/scripts/prepare-immutable-release.ps1 `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -TagName "$env:GITHUB_REF_NAME" `
+            -CommitSha "$env:GITHUB_SHA" `
+            -BundleManifest "${{ steps.transport.outputs.bundle-manifest }}" `
+            -MaterialsManifest "${{ steps.transport.outputs.materials-manifest }}"
+
+      - name: Attest the exact bundle digest with GitHub and Sigstore
+        id: bundle-attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-path: ${{ steps.package.outputs.archive }}
+          subject-name: mywallpaper-addon-bundle.zip
+          subject-digest: ${{ needs.verify-package.outputs.archive-sha256 }}
+
+      - name: Verify the GitHub/Sigstore proof before admission OIDC
+        shell: pwsh
+        env:
+          BUNDLE_ATTESTATION_BUNDLE: ${{ steps.bundle-attestation.outputs.bundle-path }}
+          BUNDLE_ATTESTATION_ID: ${{ steps.bundle-attestation.outputs.attestation-id }}
+          BUNDLE_ATTESTATION_URL: ${{ steps.bundle-attestation.outputs.attestation-url }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:BUNDLE_ATTESTATION_ID)) {
+            throw 'GitHub did not return the bundle attestation identity'
+          }
+          $url = $null
+          if (
+            -not [Uri]::TryCreate($env:BUNDLE_ATTESTATION_URL, [UriKind]::Absolute, [ref]$url) -or
+            $url.Scheme -cne 'https'
+          ) { throw 'GitHub did not return an HTTPS bundle attestation URL' }
+          if (-not (Test-Path -LiteralPath $env:BUNDLE_ATTESTATION_BUNDLE -PathType Leaf)) {
+            throw 'GitHub did not persist the bundle Sigstore attestation'
+          }
+          if ((Get-Item -LiteralPath $env:BUNDLE_ATTESTATION_BUNDLE).Length -le 0) {
+            throw 'GitHub persisted an empty bundle Sigstore attestation'
+          }
+
+      - name: Publish immutable content-addressed GitHub Release assets
+        id: release-assets
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.github-release.outputs.release-id }}
+        run: |
+          & toolchain/.github/scripts/publish-release-assets.ps1 `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -ReleaseId "$env:RELEASE_ID" `
+            -BundleTransportRoot "$env:RUNNER_TEMP/mywallpaper-bundle-transport" `
+            -MaterialsTransportRoot "$env:RUNNER_TEMP/mywallpaper-materials-transport" `
+            -OutputRoot "$env:RUNNER_TEMP/mywallpaper-release-descriptors"
+
+      - name: Publish and cryptographically lock the GitHub Release
+        id: immutable-release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          & toolchain/.github/scripts/finalize-immutable-release.ps1 `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -ReleaseId "${{ steps.github-release.outputs.release-id }}" `
+            -TagName "$env:GITHUB_REF_NAME" `
+            -CommitSha "$env:GITHUB_SHA" `
+            -BundleArtifact "${{ steps.release-assets.outputs.bundle-artifact }}" `
+            -MaterialsArtifact "${{ steps.release-assets.outputs.materials-artifact }}"
 
       - name: Publish the immutable release through GitHub OIDC
+        id: ingestion
         shell: pwsh
         env:
-          ADDON_BUNDLE: ${{ steps.package.outputs.archive }}
+          BUNDLE_ARTIFACT_PATH: ${{ steps.release-assets.outputs.bundle-artifact }}
+          EXPECTED_BUNDLE_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
+          EXPECTED_BUNDLE_SIZE: ${{ needs.verify-package.outputs.archive-size }}
           PUBLICATION_AUDIENCE: ${{ steps.publication.outputs.audience }}
           PUBLICATION_URL: ${{ steps.publication.outputs.url }}
           DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
+          IMMUTABLE_RELEASE: ${{ steps.immutable-release.outputs.release-immutable }}
         run: |
+          if ($env:IMMUTABLE_RELEASE -cne 'true') {
+            throw 'MyWallpaper OIDC is forbidden until GitHub confirms an immutable release'
+          }
           $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
           $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
           $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
@@ -465,6 +832,20 @@ jobs:
           ) {
             throw 'Add-on release idempotency key construction failed'
           }
+          . toolchain/.github/scripts/release-artifact-contract.ps1
+          $artifact = (Read-ReleaseArtifactDescriptor $env:BUNDLE_ARTIFACT_PATH 'bundle' 1000).Artifact
+          if ([string]$artifact.sha256 -cne $env:EXPECTED_BUNDLE_SHA256 -or
+              [long]$artifact.sizeBytes -ne [long]$env:EXPECTED_BUNDLE_SIZE) {
+            throw 'GitHub bundle artifact descriptor differs from the verified logical archive'
+          }
+          $request = [ordered]@{
+            schemaVersion = 1
+            artifact = $artifact
+            distributionDigest = $env:DISTRIBUTION_DIGEST
+          }
+          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+            ($request | ConvertTo-Json -Depth 8 -Compress)
+          )
           try {
             $response = Invoke-RestMethod `
               -Method Post `
@@ -474,10 +855,9 @@ jobs:
                 Authorization = "Bearer $($tokenResponse.value)"
                 'Idempotency-Key' = $idempotencyKey
                 'X-Request-ID' = $idempotencyKey
-                'X-MyWallpaper-Distribution-Digest' = $env:DISTRIBUTION_DIGEST
               } `
-              -ContentType 'application/zip' `
-              -InFile $env:ADDON_BUNDLE
+              -ContentType 'application/json' `
+              -Body $requestBytes
           } catch {
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
             throw "MyWallpaper publication rejected the release: $detail"
@@ -491,11 +871,187 @@ jobs:
           if (([string]$response.addonReleaseId) -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
             throw 'MyWallpaper publication returned an invalid release identity'
           }
+          $nativeManifestDigest = [string]$response.nativeManifestDigest
           if ($response.state -ceq 'candidate') {
-            @(
-              'The immutable bundle was accepted as a native release candidate.',
-              'MyWallpaper will expose it only after an independent isolated rebuild',
-              'reproduces the source, distribution and native file digests.'
-            ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            if ($nativeManifestDigest -cnotmatch '^sha256:[0-9a-f]{64}$') {
+              throw 'MyWallpaper candidate response omitted the native manifest digest'
+            }
+            'The immutable bundle is a native candidate; finalization continues in this job.' |
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
           }
+          "state=$($response.state)" >> $env:GITHUB_OUTPUT
+          "addon-release-id=$($response.addonReleaseId)" >> $env:GITHUB_OUTPUT
+          "native-manifest-digest=$nativeManifestDigest" >> $env:GITHUB_OUTPUT
           $response | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Create NativeBuildEvidenceV1 for the accepted candidate
+        if: steps.ingestion.outputs.state == 'candidate'
+        id: native-evidence
+        shell: pwsh
+        env:
+          ADDON_RELEASE_ID: ${{ steps.ingestion.outputs.addon-release-id }}
+          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
+          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
+          GITHUB_TOKEN: ${{ github.token }}
+          NATIVE_MANIFEST_DIGEST: ${{ steps.ingestion.outputs.native-manifest-digest }}
+          SUBJECT_PATH: ${{ steps.admission.outputs.subject }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if ($env:GITHUB_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$') {
+            throw 'Caller repository name is invalid'
+          }
+          $licenseUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/license?ref=$([Uri]::EscapeDataString($env:GITHUB_SHA))"
+          try {
+            $licenseResponse = Invoke-RestMethod `
+              -Uri $licenseUri `
+              -MaximumRedirection 0 `
+              -Headers @{
+                Accept = 'application/vnd.github+json'
+                Authorization = "Bearer $env:GITHUB_TOKEN"
+                'User-Agent' = 'MyWallpaper-admission-v1'
+                'X-GitHub-Api-Version' = '2026-03-10'
+              }
+          } catch {
+            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
+            throw "Could not resolve the exact source license through GitHub: $detail"
+          }
+          $licenseSpdx = [string]$licenseResponse.license.spdx_id
+          if (
+            $licenseSpdx -in @('NOASSERTION', 'OTHER') -or
+            $licenseSpdx -cnotmatch '^[A-Za-z0-9.+-]{1,64}$'
+          ) { throw 'GitHub did not identify an admissible SPDX license at the release commit' }
+
+          $evidencePath = Join-Path $env:RUNNER_TEMP 'native-build-evidence-v1.json'
+          if (Test-Path -LiteralPath $evidencePath) { throw 'Native evidence output already exists' }
+          $summaryJson = node toolchain/.github/scripts/create-native-build-evidence.mjs `
+            --subject $env:SUBJECT_PATH `
+            --addon-release-id $env:ADDON_RELEASE_ID `
+            --license-spdx $licenseSpdx `
+            --native-manifest-digest $env:NATIVE_MANIFEST_DIGEST `
+            --materials-digest $env:EXPECTED_MATERIALS_SHA256 `
+            --materials-size $env:EXPECTED_MATERIALS_SIZE `
+            --workflow-sha $env:WORKFLOW_SHA `
+            --output $evidencePath
+          if ($LASTEXITCODE -ne 0) { throw 'NativeBuildEvidenceV1 generation failed' }
+          $summary = $summaryJson | ConvertFrom-Json
+          if (
+            $summary.evidencePath -cne $evidencePath -or
+            $summary.evidenceDigest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+            $summary.materialsDigest -cne $env:EXPECTED_MATERIALS_SHA256 -or
+            [long]$summary.materialsSizeBytes -ne [long]$env:EXPECTED_MATERIALS_SIZE
+          ) { throw 'NativeBuildEvidenceV1 summary differs from the verified admission proof' }
+          "evidence=$evidencePath" >> $env:GITHUB_OUTPUT
+          "evidence-sha256=$($summary.evidenceDigest)" >> $env:GITHUB_OUTPUT
+
+      - name: Finalize native admission with a second GitHub OIDC token
+        if: steps.ingestion.outputs.state == 'candidate'
+        shell: pwsh
+        env:
+          ADDON_RELEASE_ID: ${{ steps.ingestion.outputs.addon-release-id }}
+          EVIDENCE_PATH: ${{ steps.native-evidence.outputs.evidence }}
+          EXPECTED_EVIDENCE_SHA256: ${{ steps.native-evidence.outputs.evidence-sha256 }}
+          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
+          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
+          FINALIZER_AUDIENCE: ${{ steps.publication.outputs.finalizer-audience }}
+          FINALIZER_BASE_URL: ${{ steps.publication.outputs.finalizer-base }}
+          MATERIALS_ARTIFACT_PATH: ${{ steps.release-assets.outputs.materials-artifact }}
+        run: |
+          if ($env:ADDON_RELEASE_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
+            throw 'Native finalizer release identity is invalid'
+          }
+          $finalizerUrl = "$($env:FINALIZER_BASE_URL)/$($env:ADDON_RELEASE_ID)/evidence"
+          $uri = $null
+          if (
+            -not [Uri]::TryCreate($finalizerUrl, [UriKind]::Absolute, [ref]$uri) -or
+            $uri.Scheme -cne 'https'
+          ) { throw 'Native finalizer URL is invalid' }
+
+          if (-not (Test-Path -LiteralPath $env:EVIDENCE_PATH -PathType Leaf)) {
+            throw 'Native evidence file is missing'
+          }
+          $actualEvidenceDigest = 'sha256:' +
+            (Get-FileHash -LiteralPath $env:EVIDENCE_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualEvidenceDigest -cne $env:EXPECTED_EVIDENCE_SHA256) {
+            throw 'Native evidence changed before finalization'
+          }
+          $evidenceJson = Get-Content -LiteralPath $env:EVIDENCE_PATH -Raw
+          try {
+            $null = $evidenceJson | ConvertFrom-Json
+          } catch {
+            throw 'Native evidence file is not valid JSON'
+          }
+          . toolchain/.github/scripts/release-artifact-contract.ps1
+          $materials = (Read-ReleaseArtifactDescriptor $env:MATERIALS_ARTIFACT_PATH 'materials' 1000).Artifact
+          if ([string]$materials.sha256 -cne $env:EXPECTED_MATERIALS_SHA256 -or
+              [long]$materials.sizeBytes -ne [long]$env:EXPECTED_MATERIALS_SIZE) {
+            throw 'GitHub materials artifact descriptor differs from the verified logical archive'
+          }
+          $materialsJson = Get-Content -LiteralPath $env:MATERIALS_ARTIFACT_PATH -Raw
+          if ($env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
+              $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]{0,15}$') {
+            throw 'GitHub workflow attempt identity is invalid'
+          }
+          $nodeVersion = (& node --version).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not observe the publisher Node.js version' }
+          $pwshVersion = $PSVersionTable.PSVersion.ToString()
+          foreach ($observation in @($env:ImageOS, $env:ImageVersion, $nodeVersion, $pwshVersion)) {
+            $value = [string]$observation
+            if ([string]::IsNullOrWhiteSpace($value) -or $value -cne $value.Trim() -or
+                [Text.Encoding]::UTF8.GetByteCount($value) -gt 256 -or
+                $value -match '[\x00-\x1f\x7f]') {
+              throw 'GitHub publisher attempt observation is incomplete'
+            }
+          }
+          $attempt = [ordered]@{
+            schemaVersion = 1
+            runId = [string]$env:GITHUB_RUN_ID
+            runAttempt = [string]$env:GITHUB_RUN_ATTEMPT
+            publisher = [ordered]@{
+              imageOs = [string]$env:ImageOS
+              imageVersion = [string]$env:ImageVersion
+              nodeVersion = $nodeVersion
+              pwshVersion = $pwshVersion
+            }
+          } | ConvertTo-Json -Depth 8 -Compress
+          $requestText = '{"schemaVersion":1,"evidence":' + $evidenceJson +
+            ',"attempt":' + $attempt + ',"materialsArtifact":' + $materialsJson + '}'
+          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestText)
+
+          $audience = [Uri]::EscapeDataString($env:FINALIZER_AUDIENCE)
+          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
+          $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
+          if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
+            throw 'GitHub finalizer OIDC audience query construction failed'
+          }
+          $tokenResponse = Invoke-RestMethod `
+            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+            -Uri $tokenUri
+          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+            throw 'GitHub finalizer OIDC token was not returned'
+          }
+          try {
+            $result = Invoke-RestMethod `
+              -Method Post `
+              -Uri $uri `
+              -MaximumRedirection 0 `
+              -Headers @{ Authorization = "Bearer $($tokenResponse.value)" } `
+              -ContentType 'application/json' `
+              -Body $requestBytes
+          } catch {
+            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+              $_.Exception.Message
+            } else {
+              $_.ErrorDetails.Message
+            }
+            throw "MyWallpaper native finalizer rejected the evidence: $detail"
+          }
+          if ([string]$result.addonReleaseId -cne $env:ADDON_RELEASE_ID) {
+            throw 'Native finalizer returned a different release identity'
+          }
+          if ([string]$result.state -cne 'available') {
+            throw "Native finalizer did not make the release available: $($result.state)"
+          }
+          if ([string]$result.evidenceDigest -cne $env:EXPECTED_EVIDENCE_SHA256) {
+            throw 'Native finalizer returned a different evidence digest'
+          }
+          $result | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

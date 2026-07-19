@@ -7,15 +7,25 @@ param(
   [Parameter(Mandatory = $true)][string]$RepositoryOwner,
   [Parameter(Mandatory = $true)][string]$RepositoryName,
   [Parameter(Mandatory = $true)][string]$CommitSha,
-  [Parameter(Mandatory = $true)][string]$OutputArchive
+  [Parameter(Mandatory = $true)][string]$OutputArchive,
+  [Parameter(Mandatory = $true)][long]$OperationalMaxFiles,
+  [Parameter(Mandatory = $true)][long]$OperationalMaxExpandedBytes,
+  [Parameter(Mandatory = $true)][long]$OperationalMaxArchiveBytes,
+  [string]$AdmissionMetadataRoot
 )
 
 $ErrorActionPreference = 'Stop'
-$MaxExpandedBytes = 128MB
-$MaxArchiveBytes = 64MB
-$MaxFileBytes = 64MB
-$MaxFiles = 1000
+if ($OperationalMaxFiles -le 0) { throw 'OperationalMaxFiles must be positive' }
+if ($OperationalMaxExpandedBytes -le 0) { throw 'OperationalMaxExpandedBytes must be positive' }
+if ($OperationalMaxArchiveBytes -le 0) { throw 'OperationalMaxArchiveBytes must be positive' }
 $Entries = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+function Add-CheckedInt64([long]$Current, [long]$Increment, [string]$Label) {
+  if ($Increment -lt 0 -or $Current -gt ([long]::MaxValue - $Increment)) {
+    throw "$Label byte count overflows Int64"
+  }
+  return [long]($Current + $Increment)
+}
 
 function Assert-CanonicalBundlePath([string]$Path) {
   if ([Text.Encoding]::UTF8.GetByteCount($Path) -gt 900 -or $Path.Contains('\') -or $Path.Contains(':')) {
@@ -60,14 +70,15 @@ function Add-BundleFile([string]$ArchivePath, [string]$SourcePath, [string]$Labe
     throw "Development-only MyWallpaper output cannot be published: $ArchivePath"
   }
   $Item = Get-Item -LiteralPath $SourcePath -Force
-  if (-not $Item.PSIsContainer -and ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
-    if ($Item.Length -gt $MaxFileBytes) { throw "$Label exceeds the 64 MiB per-file limit: $ArchivePath" }
-  } else {
+  if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "$Label must be a regular file without links: $ArchivePath"
   }
   if ($Entries.ContainsKey($ArchivePath)) {
     if ($Entries[$ArchivePath] -ne $Item.FullName) { throw "Duplicate bundle path: $ArchivePath" }
     return
+  }
+  if ([long]$Entries.Count -ge $OperationalMaxFiles) {
+    throw 'Bundle exhausted the runner operational file budget'
   }
   $Entries[$ArchivePath] = $Item.FullName
 }
@@ -191,13 +202,15 @@ Add-Tree (Join-Path $CompanionRoot 'native/out') 'native/out' 'companion output'
 Add-Tree (Join-Path $HooksRoot 'native/out') 'native/out' 'hook output'
 
 if ($Entries.Count -lt 4) { throw 'Bundle must contain manifest, license, web output and thumbnail' }
-if ($Entries.Count -gt $MaxFiles) { throw "Bundle exceeds $MaxFiles files" }
 $ExpandedBytes = 0L
 $Inventory = [Collections.Generic.List[object]]::new()
 foreach ($ArchivePath in @(Get-SortedEntryPaths)) {
   $SourcePath = [string]$Entries[$ArchivePath]
   $Size = (Get-Item -LiteralPath $SourcePath).Length
-  $ExpandedBytes += $Size
+  $ExpandedBytes = Add-CheckedInt64 $ExpandedBytes $Size 'Bundle'
+  if ($ExpandedBytes -gt $OperationalMaxExpandedBytes) {
+    throw 'Bundle exhausted the runner operational expanded-byte budget'
+  }
   $Sha256 = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
   $MediaType = Get-MediaType $ArchivePath
   $Inventory.Add([ordered]@{
@@ -207,7 +220,6 @@ foreach ($ArchivePath in @(Get-SortedEntryPaths)) {
     mediaType = $MediaType
   })
 }
-if ($ExpandedBytes -gt $MaxExpandedBytes) { throw 'Bundle exceeds the 128 MiB expanded limit' }
 
 $TreeInventory = ((& git -C $RepositoryRoot ls-tree -r --full-tree $CommitSha) -join "`n") + "`n"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($TreeInventory)) { throw 'Could not inventory the exact source tree' }
@@ -232,10 +244,24 @@ $IndexResult = $IndexResultJson | ConvertFrom-Json
 if ($IndexResult.distributionDigest -notmatch '^sha256:[0-9a-f]{64}$') {
   throw 'Canonical bundle index did not return a distribution digest'
 }
-$Entries.Add('bundle-index.json', $IndexPath)
+$ExpandedBytes = Add-CheckedInt64 $ExpandedBytes (Get-Item -LiteralPath $IndexPath).Length 'Bundle'
+if ($ExpandedBytes -gt $OperationalMaxExpandedBytes) {
+  throw 'Bundle exhausted the runner operational expanded-byte budget'
+}
+Add-BundleFile 'bundle-index.json' $IndexPath 'bundle index'
+if (-not [string]::IsNullOrWhiteSpace($AdmissionMetadataRoot)) {
+  $AdmissionMetadataRoot = [IO.Path]::GetFullPath($AdmissionMetadataRoot)
+  if (Test-Path -LiteralPath $AdmissionMetadataRoot) {
+    throw 'AdmissionMetadataRoot must not already exist'
+  }
+  New-Item -ItemType Directory -Path $AdmissionMetadataRoot | Out-Null
+  Copy-Item -LiteralPath $IndexPath -Destination (Join-Path $AdmissionMetadataRoot 'bundle-index.json')
+  Copy-Item -LiteralPath $InventoryPath -Destination (Join-Path $AdmissionMetadataRoot 'bundle-payload-inventory.json')
+}
 Remove-Item -LiteralPath $OutputArchive -Force -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression
 $FileStream = [IO.File]::Open($OutputArchive, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+$PackagingSucceeded = $false
 try {
   $Archive = [IO.Compression.ZipArchive]::new($FileStream, [IO.Compression.ZipArchiveMode]::Create, $false)
   try {
@@ -246,14 +272,26 @@ try {
       $OutputStream = $Entry.Open()
       try { $InputStream.CopyTo($OutputStream) }
       finally { $OutputStream.Dispose(); $InputStream.Dispose() }
+      if ($FileStream.Length -gt $OperationalMaxArchiveBytes) {
+        throw 'Bundle exhausted the runner operational archive-byte budget'
+      }
     }
   } finally { $Archive.Dispose() }
-} finally { $FileStream.Dispose() }
+  if ($FileStream.Length -gt $OperationalMaxArchiveBytes) {
+    throw 'Bundle exhausted the runner operational archive-byte budget'
+  }
+  $PackagingSucceeded = $true
+} finally {
+  $FileStream.Dispose()
+  if (-not $PackagingSucceeded) {
+    Remove-Item -LiteralPath $OutputArchive -Force -ErrorAction SilentlyContinue
+  }
+}
 Remove-Item -LiteralPath $IndexPath, $InventoryPath -Force
 
-if ((Get-Item -LiteralPath $OutputArchive).Length -gt $MaxArchiveBytes) {
+if ((Get-Item -LiteralPath $OutputArchive).Length -gt $OperationalMaxArchiveBytes) {
   Remove-Item -LiteralPath $OutputArchive -Force
-  throw 'Bundle exceeds the 64 MiB archive limit'
+  throw 'Bundle exhausted the runner operational archive-byte budget'
 }
 $ArchiveItem = Get-Item -LiteralPath $OutputArchive
 $ArchiveSha256 = (Get-FileHash -LiteralPath $OutputArchive -Algorithm SHA256).Hash.ToLowerInvariant()
