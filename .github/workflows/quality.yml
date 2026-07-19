@@ -31,17 +31,34 @@ jobs:
             -ArtifactRoot .github/canonical-cli `
             -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
           foreach ($script in @(
+            '.github/scripts/admission-environment.mjs',
+            '.github/scripts/admission-environment.test.mjs',
             '.github/scripts/build-native-companions.mjs',
-            '.github/scripts/create-addon-bundle-index.mjs'
+            '.github/scripts/compute-admission-environment-digest.mjs',
+            '.github/scripts/create-addon-bundle-index.mjs',
+            '.github/scripts/create-admission-evidence.mjs',
+            '.github/scripts/create-admission-evidence.test.mjs',
+            '.github/scripts/create-native-build-evidence.mjs',
+            '.github/scripts/verify-admission-workflow.mjs'
           )) {
             node --check $script
             if ($LASTEXITCODE -ne 0) { throw "$script has a JavaScript syntax error" }
           }
           foreach ($script in @(
+            '.github/scripts/admission-evidence.integration.test.ps1',
             '.github/scripts/expand-canonical-cli.ps1',
+            '.github/scripts/finalize-immutable-release.ps1',
             '.github/scripts/materialize-addon-build.ps1',
+            '.github/scripts/package-admission-materials.ps1',
+            '.github/scripts/package-admission-materials.test.ps1',
             '.github/scripts/package-addon-bundle.ps1',
-            '.github/scripts/sync-canonical-cli.ps1'
+            '.github/scripts/prepare-immutable-release.ps1',
+            '.github/scripts/publish-release-assets.ps1',
+            '.github/scripts/release-artifact-contract.ps1',
+            '.github/scripts/split-release-artifact.ps1',
+            '.github/scripts/split-release-artifact.test.ps1',
+            '.github/scripts/sync-canonical-cli.ps1',
+            '.github/scripts/verify-release-artifact-parts.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -50,6 +67,15 @@ jobs:
             ) | Out-Null
             if ($errors.Count -ne 0) { throw "$script has a PowerShell syntax error: $($errors[0])" }
           }
+          node .github/scripts/verify-admission-workflow.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'admission-v1 workflow contract verification failed' }
+          node --test .github/scripts/create-admission-evidence.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence tests failed' }
+          node --test .github/scripts/admission-environment.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'admission-v1 environment tests failed' }
+          & .github/scripts/package-admission-materials.test.ps1
+          & .github/scripts/split-release-artifact.test.ps1
+          & .github/scripts/admission-evidence.integration.test.ps1
 
       - name: Build and validate complete fixtures
         shell: pwsh
@@ -103,7 +129,9 @@ jobs:
           try {
             & .github/scripts/materialize-addon-build.ps1 `
               -BuildRoot "$env:RUNNER_TEMP/build" `
-              -RepositoryRoot fixtures/native-hook
+              -RepositoryRoot fixtures/native-hook `
+              -OperationalMaxFiles 512 `
+              -OperationalMaxBytes 32MB
           } catch {
             if (-not $_.Exception.Message.Contains(
               'Development-only MyWallpaper output',
@@ -118,7 +146,9 @@ jobs:
 
           & .github/scripts/materialize-addon-build.ps1 `
             -BuildRoot "$env:RUNNER_TEMP/build" `
-            -RepositoryRoot fixtures/native-hook
+            -RepositoryRoot fixtures/native-hook `
+            -OperationalMaxFiles 512 `
+            -OperationalMaxBytes 32MB
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate `
             --directory fixtures/native-hook
           if ($LASTEXITCODE -ne 0) { throw 'Materialized fixture binding generation failed' }
@@ -135,7 +165,10 @@ jobs:
               -RepositoryOwner $env:FIXTURE_REPOSITORY_OWNER `
               -RepositoryName $env:FIXTURE_REPOSITORY_NAME `
               -CommitSha $env:FIXTURE_COMMIT_SHA `
-              -OutputArchive "$env:RUNNER_TEMP/$name"
+              -OutputArchive "$env:RUNNER_TEMP/$name" `
+              -OperationalMaxFiles 512 `
+              -OperationalMaxExpandedBytes 32MB `
+              -OperationalMaxArchiveBytes 32MB
           }
           $first = (Get-FileHash -LiteralPath "$env:RUNNER_TEMP/first.zip" -Algorithm SHA256).Hash
           $second = (Get-FileHash -LiteralPath "$env:RUNNER_TEMP/second.zip" -Algorithm SHA256).Hash
@@ -181,3 +214,114 @@ jobs:
               }
             }
           } finally { $zip.Dispose() }
+
+      - name: Exercise public admission evidence end to end
+        shell: pwsh
+        env:
+          FIXTURE_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          $source = Join-Path $env:RUNNER_TEMP 'admission-source'
+          New-Item -ItemType Directory -Path $source | Out-Null
+          Copy-Item -Path 'fixtures/native-hook/*' -Destination $source -Recurse -Force
+          [ordered]@{
+            name = 'admission-fixture'
+            private = $true
+            version = '0.0.0'
+            packageManager = 'pnpm@11.12.0'
+          } | ConvertTo-Json -Compress |
+            Set-Content -LiteralPath "$source/package.json" -Encoding utf8NoBOM
+          "lockfileVersion: '9.0'" |
+            Set-Content -LiteralPath "$source/pnpm-lock.yaml" -Encoding utf8NoBOM
+          git -C $source init --initial-branch=admission
+          git -C $source config user.email 'admission-fixture@mywallpaper.invalid'
+          git -C $source config user.name 'MyWallpaper admission fixture'
+          git -C $source add --all
+          git -C $source commit -m 'Create admission evidence fixture'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit admission evidence fixture' }
+          $commit = (git -C $source rev-parse HEAD).Trim().ToLowerInvariant()
+          $workflowSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+
+          $primary = Join-Path $env:RUNNER_TEMP 'admission-primary'
+          $reproduction = Join-Path $env:RUNNER_TEMP 'admission-reproduction'
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/build" -Destination $primary -Recurse
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/build" -Destination $reproduction -Recurse
+          $archive = Join-Path $env:RUNNER_TEMP 'admission-bundle.zip'
+          $metadata = Join-Path $env:RUNNER_TEMP 'admission-bundle-metadata'
+          & .github/scripts/package-addon-bundle.ps1 `
+            -RepositoryRoot $source `
+            -CompanionRoot "$primary/companion" `
+            -HooksRoot "$primary/hooks" `
+            -RepositoryId $env:FIXTURE_REPOSITORY_ID `
+            -RepositoryOwner MyWallpapers `
+            -RepositoryName admission-fixture `
+            -CommitSha $commit `
+            -OutputArchive $archive `
+            -OperationalMaxFiles 512 `
+            -OperationalMaxExpandedBytes 32MB `
+            -OperationalMaxArchiveBytes 32MB `
+            -AdmissionMetadataRoot $metadata
+
+          $observations = Join-Path $env:RUNNER_TEMP 'admission-observations'
+          foreach ($replica in @(1, 2)) {
+            $directory = Join-Path $observations "replica-$replica"
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            [ordered]@{
+              schemaVersion = 1
+              replica = $replica
+              runner = [ordered]@{
+                environment = 'github-hosted'
+                label = 'windows-2025'
+                operatingSystem = 'Windows'
+                architecture = 'X64'
+              }
+              workflowSha = $workflowSha
+            } | ConvertTo-Json -Depth 8 -Compress |
+              Set-Content -LiteralPath "$directory/replica.json" -Encoding utf8NoBOM
+          }
+
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'admission-evidence'
+          $summaryJson = node .github/scripts/create-admission-evidence.mjs `
+            --repository-root $source `
+            --primary-root $primary `
+            --reproduction-root $reproduction `
+            --replica-observations-root $observations `
+            --bundle-index "$metadata/bundle-index.json" `
+            --payload-inventory "$metadata/bundle-payload-inventory.json" `
+            --archive $archive `
+            --toolchain-root $env:GITHUB_WORKSPACE `
+            --repository-id $env:FIXTURE_REPOSITORY_ID `
+            --repository-name MyWallpapers/admission-fixture `
+            --commit-sha $commit `
+            --release-ref refs/tags/v0.0.0 `
+            --workflow-ref "MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@$workflowSha" `
+            --workflow-sha $workflowSha `
+            --operational-max-files 512 `
+            --operational-max-expanded-bytes (32MB) `
+            --operational-max-metadata-bytes (16MB) `
+            --output-root $evidenceRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Admission evidence fixture failed' }
+          $summary = $summaryJson | ConvertFrom-Json
+          $subjectDigest = 'sha256:' + (Get-FileHash -LiteralPath $summary.subjectPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($subjectDigest -cne $summary.subjectDigest -or $summary.authorInventory.fileCount -le 0) {
+            throw 'Admission subject digest or author inventory is invalid'
+          }
+
+          $firstMaterials = Join-Path $env:RUNNER_TEMP 'admission-materials-first.zip'
+          $secondMaterials = Join-Path $env:RUNNER_TEMP 'admission-materials-second.zip'
+          & .github/scripts/package-admission-materials.ps1 `
+            -EvidenceRoot $evidenceRoot `
+            -OutputArchive $firstMaterials `
+            -OperationalMaxFiles 512 `
+            -OperationalMaxExpandedBytes 32MB `
+            -OperationalMaxArchiveBytes 32MB
+          & .github/scripts/package-admission-materials.ps1 `
+            -EvidenceRoot $evidenceRoot `
+            -OutputArchive $secondMaterials `
+            -OperationalMaxFiles 512 `
+            -OperationalMaxExpandedBytes 32MB `
+            -OperationalMaxArchiveBytes 32MB
+          $firstDigest = (Get-FileHash -LiteralPath $firstMaterials -Algorithm SHA256).Hash
+          $secondDigest = (Get-FileHash -LiteralPath $secondMaterials -Algorithm SHA256).Hash
+          if ($firstDigest -cne $secondDigest) {
+            throw 'Identical admission evidence did not produce identical materials archives'
+          }

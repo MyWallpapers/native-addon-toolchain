@@ -1,10 +1,14 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$BuildRoot,
-  [Parameter(Mandatory = $true)][string]$RepositoryRoot
+  [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+  [Parameter(Mandatory = $true)][long]$OperationalMaxFiles,
+  [Parameter(Mandatory = $true)][long]$OperationalMaxBytes
 )
 
 $ErrorActionPreference = 'Stop'
+if ($OperationalMaxFiles -le 0) { throw 'OperationalMaxFiles must be positive' }
+if ($OperationalMaxBytes -le 0) { throw 'OperationalMaxBytes must be positive' }
 $BuildRoot = (Resolve-Path -LiteralPath $BuildRoot).ProviderPath
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).ProviderPath
 $Destinations = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -13,6 +17,13 @@ function Test-ContainsPath([string]$Root, [string]$Candidate) {
   $RootPrefix = $Root.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
   return $Candidate.Equals($Root, [StringComparison]::OrdinalIgnoreCase) -or
     $Candidate.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Add-CheckedInt64([long]$Current, [long]$Increment, [string]$Label) {
+  if ($Increment -lt 0 -or $Current -gt ([long]::MaxValue - $Increment)) {
+    throw "$Label count overflows Int64"
+  }
+  return [long]($Current + $Increment)
 }
 
 if ((Test-ContainsPath $BuildRoot $RepositoryRoot) -or (Test-ContainsPath $RepositoryRoot $BuildRoot)) {
@@ -106,10 +117,13 @@ while ($PendingBuildDirectories.Count -gt 0) {
       $Relative.StartsWith('hooks/native/out/', [StringComparison]::OrdinalIgnoreCase) -or
       $Relative -cin @('companion/.empty', 'hooks/.empty')
     if (-not $Allowed) { throw "Build artifact contains an unexpected file: $Relative" }
-    $BuildFiles++
-    $BuildBytes += $Item.Length
-    if ($BuildFiles -gt 1200 -or $BuildBytes -gt 192MB) {
-      throw 'Build artifact exceeds the verifier input limit'
+    $BuildFiles = Add-CheckedInt64 $BuildFiles 1 'Build file'
+    $BuildBytes = Add-CheckedInt64 $BuildBytes $Item.Length 'Build byte'
+    if ($BuildFiles -gt $OperationalMaxFiles) {
+      throw 'Build artifact exhausted the verifier operational file budget'
+    }
+    if ($BuildBytes -gt $OperationalMaxBytes) {
+      throw 'Build artifact exhausted the verifier operational byte budget'
     }
   }
 }
