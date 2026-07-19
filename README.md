@@ -8,7 +8,10 @@ caller reference. The MyWallpaper backend also admits only workflow SHAs already
 present in its explicit allowlist. End users never run this toolchain and never
 compile add-on code.
 
-The workflow builds one release bundle from the exact Git tag:
+The workflow builds one release bundle from the exact Git tag. The tagged
+commit must be reachable from the repository's public, reviewed `main` default
+branch. That ancestry is checked before either disposable replica executes
+caller code and is checked again immediately before GitHub Release publication:
 
 1. rebuild web, companion and hook outputs twice in two independent,
    disposable GitHub-hosted Windows 2025 VMs;
@@ -145,17 +148,30 @@ the exact 40-character workflow SHA it publishes; all jobs reject a movable
 branch/tag reference before executing caller code or receiving release state.
 Updating the contract is deliberately a three-phase operation:
 
-1. merge and review the toolchain commit, then record its full SHA;
+1. merge and review the toolchain commit, require the `smoke` and
+   `promotion-eligible` checks on that `main` push, then record its full SHA;
 2. add that SHA to the backend's `admission-v1` allowlist;
 3. only after the backend deployment succeeds, advance the protected branch
    and update callers to that exact SHA.
 
-The branch must be protected by a GitHub repository ruleset, but branch
-protection does not replace either caller pinning or the backend SHA allowlist.
+The `promotion-eligible` context is emitted only after `smoke` succeeds on an
+exact `refs/heads/main` push. Pull requests receive a differently named skipped
+job, so their unmerged commit cannot satisfy the pointer's required context.
+The `admission-v1` branch must require that context in its GitHub repository
+ruleset, but branch protection does not replace either caller pinning or the
+backend SHA allowlist.
 
-Publication starts by pushing a newly-created `v`-prefixed SemVer tag whose
-version must equal the normalized manifest SemVer. Do not create or publish the
-GitHub Release manually: the trusted workflow owns its draft, exact assets and
+The public repository also runs one build-free CodeQL job for the GitHub Actions
+workflows and JavaScript control-plane scripts on pull requests, `main` pushes
+and a weekly schedule. It uses the extended security query suite and never
+executes an add-on fixture or installs its dependencies. When repository Actions
+are allowlisted, `github/codeql-action/*@*` must be included alongside the existing
+exact-SHA-pinned GitHub actions.
+
+Publication starts by pushing a newly-created `v`-prefixed SemVer tag from a
+commit already reachable from the public repository's current default branch;
+its version must equal the normalized manifest SemVer. Do not create or publish
+the GitHub Release manually: the trusted workflow owns its draft, exact assets and
 publication. Publication creates a short-lived candidate while MyWallpaper
 applies the same automatic schema, inventory, provenance and byte-integrity preflight to
 Canvas-only, companion and hook releases. For a native candidate, the same
