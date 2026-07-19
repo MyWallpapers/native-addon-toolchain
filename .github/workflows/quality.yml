@@ -33,6 +33,8 @@ jobs:
           foreach ($script in @(
             '.github/scripts/admission-environment.mjs',
             '.github/scripts/admission-environment.test.mjs',
+            '.github/scripts/assert-release-on-default-branch.mjs',
+            '.github/scripts/assert-release-on-default-branch.test.mjs',
             '.github/scripts/build-native-companions.mjs',
             '.github/scripts/compute-admission-environment-digest.mjs',
             '.github/scripts/create-addon-bundle-index.mjs',
@@ -42,6 +44,7 @@ jobs:
             '.github/scripts/runner-observation.mjs',
             '.github/scripts/runner-observation.test.mjs',
             '.github/scripts/verify-runner-observation-predicate.mjs',
+            '.github/scripts/verify-control-plane-workflows.mjs',
             '.github/scripts/write-runner-observation.mjs',
             '.github/scripts/verify-admission-workflow.mjs'
           )) {
@@ -76,6 +79,10 @@ jobs:
           }
           node .github/scripts/verify-admission-workflow.mjs
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 workflow contract verification failed' }
+          node .github/scripts/verify-control-plane-workflows.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'toolchain control-plane workflow verification failed' }
+          node --test .github/scripts/assert-release-on-default-branch.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'release-on-default-branch ancestry tests failed' }
           node --test .github/scripts/create-admission-evidence.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence tests failed' }
           node --test .github/scripts/admission-environment.test.mjs
@@ -347,3 +354,23 @@ jobs:
           if ($firstDigest -cne $secondDigest) {
             throw 'Identical admission evidence did not produce identical materials archives'
           }
+
+  promotion-eligible:
+    name: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'promotion-eligible' || 'promotion-not-applicable' }}
+    needs: smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.smoke.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Confirm the reviewed main commit is eligible for promotion
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_NAME" = 'push'
+          test "$EVENT_REF" = 'refs/heads/main'
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]

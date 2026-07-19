@@ -87,6 +87,17 @@ jobs:
         with:
           node-version-file: toolchain/.nvmrc
 
+      - name: Require the tagged release commit on the reviewed default branch
+        shell: pwsh
+        env:
+          MYWALLPAPER_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node toolchain/.github/scripts/assert-release-on-default-branch.mjs `
+            --repository "$env:GITHUB_REPOSITORY" `
+            --repository-id "$env:GITHUB_REPOSITORY_ID" `
+            --commit-sha "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'Tagged release commit is not on the reviewed default branch' }
+
       - name: Verify and expand canonical MyWallpaper CLI
         shell: pwsh
         run: |
@@ -784,6 +795,17 @@ jobs:
             throw 'Runner observation verification summary is inconsistent'
           }
           "predicate=$predicate" >> $env:GITHUB_OUTPUT
+
+      - name: Reconfirm the tagged release commit on the reviewed default branch
+        shell: pwsh
+        env:
+          MYWALLPAPER_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node toolchain/.github/scripts/assert-release-on-default-branch.mjs `
+            --repository "$env:GITHUB_REPOSITORY" `
+            --repository-id "$env:GITHUB_REPOSITORY_ID" `
+            --commit-sha "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'Tagged release commit is no longer on the reviewed default branch' }
 
       - name: Create or reuse the exact controlled GitHub draft release
         id: github-release
