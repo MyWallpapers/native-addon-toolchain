@@ -26,6 +26,8 @@ jobs:
 
       - name: Verify canonical release validator and script syntax
         shell: pwsh
+        env:
+          IMMUTABLE_CHECKOUT_TEST_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           & .github/scripts/expand-canonical-cli.ps1 `
             -ArtifactRoot .github/canonical-cli `
@@ -43,6 +45,8 @@ jobs:
             '.github/scripts/create-native-build-evidence.mjs',
             '.github/scripts/runner-observation.mjs',
             '.github/scripts/runner-observation.test.mjs',
+            '.github/scripts/safe-files.mjs',
+            '.github/scripts/safe-files.test.mjs',
             '.github/scripts/verify-runner-observation-predicate.mjs',
             '.github/scripts/verify-control-plane-workflows.mjs',
             '.github/scripts/write-runner-observation.mjs',
@@ -58,6 +62,8 @@ jobs:
             '.github/scripts/github-api-contract.ps1',
             '.github/scripts/github-api-contract.test.ps1',
             '.github/scripts/materialize-addon-build.ps1',
+            '.github/scripts/materialize-immutable-repository.ps1',
+            '.github/scripts/materialize-immutable-repository.test.ps1',
             '.github/scripts/package-admission-materials.ps1',
             '.github/scripts/package-admission-materials.test.ps1',
             '.github/scripts/package-addon-bundle.ps1',
@@ -89,6 +95,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 environment tests failed' }
           node --test .github/scripts/runner-observation.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'runner observation contract tests failed' }
+          node --test .github/scripts/safe-files.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'descriptor-bound safe file tests failed' }
+          & .github/scripts/materialize-immutable-repository.test.ps1 `
+            -Repository $env:GITHUB_REPOSITORY `
+            -CommitSha $env:IMMUTABLE_CHECKOUT_TEST_SHA
           & .github/scripts/package-admission-materials.test.ps1
           & .github/scripts/github-api-contract.test.ps1
           & .github/scripts/split-release-artifact.test.ps1
