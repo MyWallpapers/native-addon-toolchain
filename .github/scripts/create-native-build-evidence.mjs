@@ -138,6 +138,37 @@ async function main() {
     || subject.workflow.workflowSha !== workflowSha
     || subject.build.reproducible !== true || !Array.isArray(subject.build.replicas)
     || subject.build.replicas.length !== 2) fail('Admission subject identity is inconsistent.')
+  for (const [index, replica] of subject.build.replicas.entries()) {
+    exactKeys(replica, ['replica', 'runner', 'outputInventory'], `build replica ${index + 1}`)
+    exactKeys(
+      replica.runner,
+      ['environment', 'label', 'operatingSystem', 'architecture'],
+      `build replica ${index + 1} runner`,
+    )
+    exactKeys(
+      replica.outputInventory,
+      ['fileCount', 'totalBytes', 'digest'],
+      `build replica ${index + 1} output inventory`,
+    )
+    if (replica.replica !== index + 1 || replica.runner.environment !== 'github-hosted'
+      || replica.runner.label !== 'windows-2025'
+      || replica.runner.operatingSystem !== 'Windows' || replica.runner.architecture !== 'X64'
+      || !Number.isSafeInteger(replica.outputInventory.fileCount)
+      || replica.outputInventory.fileCount <= 0
+      || !Number.isSafeInteger(replica.outputInventory.totalBytes)
+      || replica.outputInventory.totalBytes < 0) {
+      fail('Admission subject build replica is inconsistent.')
+    }
+    requiredString(replica.outputInventory.digest, 'replica output digest', SHA256_PATTERN, 71)
+  }
+  if (subject.build.replicas[0].outputInventory.digest
+    !== subject.build.replicas[1].outputInventory.digest
+    || subject.build.replicas[0].outputInventory.fileCount
+      !== subject.build.replicas[1].outputInventory.fileCount
+    || subject.build.replicas[0].outputInventory.totalBytes
+      !== subject.build.replicas[1].outputInventory.totalBytes) {
+    fail('Admission subject replicas do not describe byte-identical outputs.')
+  }
   requiredString(subject.source.repositoryId, 'repository ID', /^[1-9][0-9]*$/u, 32)
   requiredString(subject.source.repository, 'repository', REPOSITORY_PATTERN, 140)
   requiredString(subject.source.commitSha, 'commit SHA', COMMIT_PATTERN, 40)

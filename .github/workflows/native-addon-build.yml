@@ -61,40 +61,6 @@ jobs:
           $actual = (git -C toolchain rev-parse HEAD).Trim().ToLowerInvariant()
           if ($actual -cne $env:WORKFLOW_SHA) { throw 'Checked-out toolchain differs from job.workflow_sha' }
 
-      - name: Record trusted replica runner observations
-        shell: pwsh
-        env:
-          REPLICA: ${{ matrix.replica }}
-          RUNNER_ARCHITECTURE: ${{ runner.arch }}
-          RUNNER_ENVIRONMENT: ${{ runner.environment }}
-          RUNNER_OPERATING_SYSTEM: ${{ runner.os }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          $metadata = [ordered]@{
-            schemaVersion = 1
-            replica = [int]$env:REPLICA
-            runner = [ordered]@{
-              environment = $env:RUNNER_ENVIRONMENT
-              label = 'windows-2025'
-              operatingSystem = $env:RUNNER_OPERATING_SYSTEM
-              architecture = $env:RUNNER_ARCHITECTURE
-            }
-            workflowSha = $env:WORKFLOW_SHA
-          }
-          $root = Join-Path $env:RUNNER_TEMP 'mywallpaper-replica-observation'
-          New-Item -ItemType Directory -Path $root -Force | Out-Null
-          $metadata | ConvertTo-Json -Depth 8 -Compress |
-            Set-Content -LiteralPath "$root/replica.json" -Encoding utf8NoBOM
-
-      - name: Transfer trusted replica observation before caller code
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mywallpaper-replica-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mywallpaper-replica-observation/replica.json
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
-
       - name: Checkout immutable caller commit for hooks
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -138,6 +104,28 @@ jobs:
           & "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/windhawk/build-native-hooks.ps1" `
             -RepositoryRoot caller-hooks `
             -OutputRoot $output
+
+      - name: Record mutable hosted-runner and available-tool observations
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'mywallpaper-replica-observation'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          & toolchain/.github/scripts/record-replica-observation.ps1 `
+            -Replica '${{ matrix.replica }}' `
+            -WorkflowSha '${{ job.workflow_sha }}' `
+            -ToolchainRoot toolchain `
+            -CanonicalCliRoot "$env:RUNNER_TEMP/mywallpaper-cli" `
+            -HooksOutputRoot "$env:RUNNER_TEMP/mywallpaper-hooks-output" `
+            -OutputPath "$root/replica.json"
+
+      - name: Transfer trusted replica observation before caller build commands
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mywallpaper-replica-${{ matrix.replica }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mywallpaper-replica-observation/replica.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
       - name: Transfer hooks before any other caller build command
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -220,6 +208,8 @@ jobs:
       bundle-transport-artifact-name: ${{ steps.transport.outputs.bundle-artifact-name }}
       materials-transport-artifact-name: ${{ steps.transport.outputs.materials-artifact-name }}
       admission-subject-sha256: ${{ steps.evidence.outputs.subject-sha256 }}
+      runner-observation-artifact-name: ${{ steps.runner-proof.outputs.artifact-name }}
+      runner-observation-sha256: ${{ steps.evidence.outputs.runner-observation-sha256 }}
       admission-materials-sha256: ${{ steps.materials.outputs.materials-sha256 }}
       admission-materials-size: ${{ steps.materials.outputs.materials-size }}
     steps:
@@ -422,6 +412,7 @@ jobs:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-evidence'
+          $runnerObservation = Join-Path $env:RUNNER_TEMP 'mywallpaper-runner-observation-v1.json'
           $summaryJson = node toolchain/.github/scripts/create-admission-evidence.mjs `
             --repository-root caller `
             --primary-root "$env:RUNNER_TEMP/mywallpaper-build-output" `
@@ -437,6 +428,9 @@ jobs:
             --release-ref $env:CALLER_REF `
             --workflow-ref $env:WORKFLOW_REF `
             --workflow-sha $env:WORKFLOW_SHA `
+            --run-id '${{ github.run_id }}' `
+            --run-attempt '${{ github.run_attempt }}' `
+            --runner-observation-output $runnerObservation `
             --operational-max-files $env:OPERATIONAL_MAX_FILES `
             --operational-max-expanded-bytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
             --operational-max-metadata-bytes $env:OPERATIONAL_MAX_METADATA_BYTES `
@@ -452,9 +446,15 @@ jobs:
           if ($summary.subjectDigest -notmatch '^sha256:[0-9a-f]{64}$') {
             throw 'Admission subject digest is invalid'
           }
+          if ($summary.runnerObservationPath -cne $runnerObservation -or
+              $summary.runnerObservationDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw 'Volatile runner observation summary is invalid'
+          }
           "evidence-root=$evidenceRoot" >> $env:GITHUB_OUTPUT
           "subject-path=$($summary.subjectPath)" >> $env:GITHUB_OUTPUT
           "subject-sha256=$($summary.subjectDigest)" >> $env:GITHUB_OUTPUT
+          "runner-observation-path=$runnerObservation" >> $env:GITHUB_OUTPUT
+          "runner-observation-sha256=$($summary.runnerObservationDigest)" >> $env:GITHUB_OUTPUT
 
       - name: Package deterministic admission materials
         id: materials
@@ -525,6 +525,24 @@ jobs:
           Copy-Item -LiteralPath '${{ steps.evidence.outputs.subject-path }}' -Destination "$root/admission-subject-v1.json"
           "artifact-name=mywallpaper-admission-v1-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
 
+      - name: Stage the volatile signed runner-observation predicate
+        id: runner-proof
+        shell: pwsh
+        env:
+          CALLER_COMMIT_SHA: ${{ github.sha }}
+          CALLER_REPOSITORY_ID: ${{ github.repository_id }}
+          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CALLER_RUN_ID: ${{ github.run_id }}
+          EXPECTED_SHA256: ${{ steps.evidence.outputs.runner-observation-sha256 }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'mywallpaper-runner-observation-proof'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $destination = Join-Path $root 'github-hosted-runner-observation-v1.json'
+          Copy-Item -LiteralPath '${{ steps.evidence.outputs.runner-observation-path }}' -Destination $destination
+          $actual = 'sha256:' + (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:EXPECTED_SHA256) { throw 'Runner observation changed while staging' }
+          "artifact-name=mywallpaper-runner-observation-v1-$env:CALLER_REPOSITORY_ID-$env:CALLER_COMMIT_SHA-$env:CALLER_RUN_ID-$env:CALLER_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+
       - name: Transfer deterministic bundle parts to the isolated publisher
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -548,6 +566,15 @@ jobs:
         with:
           name: ${{ steps.proof.outputs.artifact-name }}
           path: ${{ runner.temp }}/mywallpaper-admission-proof
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Transfer volatile runner observations to the isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.runner-proof.outputs.artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-runner-observation-proof
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -648,6 +675,12 @@ jobs:
           name: ${{ needs.verify-package.outputs.admission-artifact-name }}
           path: ${{ runner.temp }}/mywallpaper-admission-publish
 
+      - name: Download volatile runner observations without executing them
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.verify-package.outputs.runner-observation-artifact-name }}
+          path: ${{ runner.temp }}/mywallpaper-runner-observation-publish
+
       - name: Reproduce both logical archives from deterministic parts
         id: transport
         shell: pwsh
@@ -717,6 +750,41 @@ jobs:
           }
           "subject=$subjectPath" >> $env:GITHUB_OUTPUT
 
+      - name: Verify the volatile build-runner observation predicate
+        id: runner-observation
+        shell: pwsh
+        env:
+          ARTIFACT_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
+          DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
+          EXPECTED_SHA256: ${{ needs.verify-package.outputs.runner-observation-sha256 }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          $root = "$env:RUNNER_TEMP/mywallpaper-runner-observation-publish"
+          $predicate = Join-Path $root 'github-hosted-runner-observation-v1.json'
+          $items = @(Get-ChildItem -LiteralPath $root -Force)
+          if ($items.Count -ne 1 -or @($items | Where-Object { $_.PSIsContainer }).Count -ne 0 -or
+              -not (Test-Path -LiteralPath $predicate -PathType Leaf)) {
+            throw 'Runner observation handoff must contain exactly its canonical predicate'
+          }
+          $summaryJson = node toolchain/.github/scripts/verify-runner-observation-predicate.mjs `
+            --input $predicate `
+            --expected-digest $env:EXPECTED_SHA256 `
+            --repository-id "$env:GITHUB_REPOSITORY_ID" `
+            --repository "$env:GITHUB_REPOSITORY" `
+            --commit-sha "$env:GITHUB_SHA" `
+            --release-ref "$env:GITHUB_REF" `
+            --workflow-sha $env:WORKFLOW_SHA `
+            --run-id "$env:GITHUB_RUN_ID" `
+            --run-attempt "$env:GITHUB_RUN_ATTEMPT" `
+            --artifact-digest $env:ARTIFACT_SHA256 `
+            --distribution-digest $env:DISTRIBUTION_DIGEST
+          if ($LASTEXITCODE -ne 0) { throw 'Runner observation predicate verification failed' }
+          $summary = $summaryJson | ConvertFrom-Json
+          if ($summary.predicatePath -cne $predicate -or $summary.predicateDigest -cne $env:EXPECTED_SHA256) {
+            throw 'Runner observation verification summary is inconsistent'
+          }
+          "predicate=$predicate" >> $env:GITHUB_OUTPUT
+
       - name: Create or reuse the exact controlled GitHub draft release
         id: github-release
         shell: pwsh
@@ -737,26 +805,51 @@ jobs:
           subject-name: mywallpaper-addon-bundle.zip
           subject-digest: ${{ needs.verify-package.outputs.archive-sha256 }}
 
-      - name: Verify the GitHub/Sigstore proof before admission OIDC
+      - name: Attest volatile build-runner observations for the exact bundle
+        id: runner-observation-attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: mywallpaper-addon-bundle.zip
+          subject-digest: ${{ needs.verify-package.outputs.archive-sha256 }}
+          predicate-type: https://mywallpaper.online/predicates/github-hosted-runner-observation/v1
+          predicate-path: ${{ steps.runner-observation.outputs.predicate }}
+
+      - name: Verify both GitHub/Sigstore proofs before admission OIDC
         shell: pwsh
         env:
           BUNDLE_ATTESTATION_BUNDLE: ${{ steps.bundle-attestation.outputs.bundle-path }}
           BUNDLE_ATTESTATION_ID: ${{ steps.bundle-attestation.outputs.attestation-id }}
           BUNDLE_ATTESTATION_URL: ${{ steps.bundle-attestation.outputs.attestation-url }}
+          RUNNER_ATTESTATION_BUNDLE: ${{ steps.runner-observation-attestation.outputs.bundle-path }}
+          RUNNER_ATTESTATION_ID: ${{ steps.runner-observation-attestation.outputs.attestation-id }}
+          RUNNER_ATTESTATION_URL: ${{ steps.runner-observation-attestation.outputs.attestation-url }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:BUNDLE_ATTESTATION_ID)) {
-            throw 'GitHub did not return the bundle attestation identity'
-          }
-          $url = $null
-          if (
-            -not [Uri]::TryCreate($env:BUNDLE_ATTESTATION_URL, [UriKind]::Absolute, [ref]$url) -or
-            $url.Scheme -cne 'https'
-          ) { throw 'GitHub did not return an HTTPS bundle attestation URL' }
-          if (-not (Test-Path -LiteralPath $env:BUNDLE_ATTESTATION_BUNDLE -PathType Leaf)) {
-            throw 'GitHub did not persist the bundle Sigstore attestation'
-          }
-          if ((Get-Item -LiteralPath $env:BUNDLE_ATTESTATION_BUNDLE).Length -le 0) {
-            throw 'GitHub persisted an empty bundle Sigstore attestation'
+          foreach ($proof in @(
+            [ordered]@{
+              label = 'bundle provenance'
+              id = $env:BUNDLE_ATTESTATION_ID
+              url = $env:BUNDLE_ATTESTATION_URL
+              bundle = $env:BUNDLE_ATTESTATION_BUNDLE
+            },
+            [ordered]@{
+              label = 'runner observation'
+              id = $env:RUNNER_ATTESTATION_ID
+              url = $env:RUNNER_ATTESTATION_URL
+              bundle = $env:RUNNER_ATTESTATION_BUNDLE
+            }
+          )) {
+            if ([string]::IsNullOrWhiteSpace($proof.id)) {
+              throw "GitHub did not return the $($proof.label) attestation identity"
+            }
+            $url = $null
+            if (-not [Uri]::TryCreate($proof.url, [UriKind]::Absolute, [ref]$url) -or
+                $url.Scheme -cne 'https') {
+              throw "GitHub did not return an HTTPS $($proof.label) attestation URL"
+            }
+            if (-not (Test-Path -LiteralPath $proof.bundle -PathType Leaf) -or
+                (Get-Item -LiteralPath $proof.bundle).Length -le 0) {
+              throw "GitHub did not persist the $($proof.label) Sigstore attestation"
+            }
           }
 
       - name: Publish immutable content-addressed GitHub Release assets

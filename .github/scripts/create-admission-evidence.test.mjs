@@ -29,6 +29,60 @@ function git(root, args, encoding = 'utf8') {
   return result.stdout
 }
 
+function runnerObservation(replica, workflowSha, imageVersion = '20260719.1') {
+  return {
+    schemaVersion: 1,
+    contract: 'github-hosted-windows-build-observation-v1',
+    replica,
+    run: { id: '123456', attempt: '1' },
+    workflowSha,
+    runner: {
+      environment: 'github-hosted',
+      label: 'windows-2025',
+      operatingSystem: 'Windows',
+      architecture: 'X64',
+      imageOs: 'win25',
+      imageVersion,
+    },
+    tools: {
+      node: { version: 'v22.22.3' },
+      powershell: { version: '7.5.2' },
+      rust: {
+        rustc: {
+          sha256: `sha256:${'1'.repeat(64)}`,
+          version: 'rustc 1.90.0 (fixture)\nhost: x86_64-pc-windows-msvc\nrelease: 1.90.0\nLLVM version: 20.1.0',
+        },
+        cargo: {
+          sha256: `sha256:${'2'.repeat(64)}`,
+          version: 'cargo 1.90.0 (fixture)\nrelease: 1.90.0\nhost: x86_64-pc-windows-msvc',
+        },
+      },
+      msvc: {
+        toolsetVersion: '14.44.35207',
+        linker: {
+          sha256: `sha256:${'3'.repeat(64)}`,
+          version: '14.44.35207',
+          fileVersion: '14.44.35207.1',
+        },
+      },
+      windowsSdk: { availableVersions: ['10.0.26100.0'] },
+      windhawk: {
+        used: true,
+        windhawkCommit: '4'.repeat(40),
+        archiveSha256: `sha256:${'5'.repeat(64)}`,
+        clang: {
+          sha256: `sha256:${'6'.repeat(64)}`,
+          version: 'clang version 20.1.8\nTarget: x86_64-w64-windows-gnu',
+        },
+        linker: {
+          sha256: `sha256:${'7'.repeat(64)}`,
+          version: 'LLD 20.1.8 (compatible with GNU linkers)',
+        },
+      },
+    },
+  }
+}
+
 test('admission-v1 evidence binds two identical replicas and rejects drift', async () => {
   const toolchainRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
   const script = join(toolchainRoot, '.github', 'scripts', 'create-admission-evidence.mjs')
@@ -68,17 +122,10 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     for (const replica of [1, 2]) {
       const directory = join(observations, `replica-${replica}`)
       await mkdir(directory, { recursive: true })
-      await writeFile(join(directory, 'replica.json'), canonicalBytes({
-        schemaVersion: 1,
-        replica,
-        runner: {
-          environment: 'github-hosted',
-          label: 'windows-2025',
-          operatingSystem: 'Windows',
-          architecture: 'X64',
-        },
-        workflowSha,
-      }))
+      await writeFile(
+        join(directory, 'replica.json'),
+        canonicalBytes(runnerObservation(replica, workflowSha)),
+      )
     }
 
     const payloadBytes = Buffer.from('<!doctype html>', 'utf8')
@@ -126,6 +173,9 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--release-ref', 'refs/tags/v1.2.3',
       '--workflow-ref', `MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@${workflowSha}`,
       '--workflow-sha', workflowSha,
+      '--run-id', '123456',
+      '--run-attempt', '1',
+      '--runner-observation-output', `${outputRoot}-runner-observation.json`,
       '--operational-max-files', '512',
       '--operational-max-expanded-bytes', String(32 * 1024 * 1024),
       '--operational-max-metadata-bytes', String(16 * 1024 * 1024),
@@ -144,6 +194,10 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     assert.equal(subject.build.reproducible, true)
     assert.equal(subject.build.replicas.length, 2)
     assert.equal(subject.build.replicas[0].outputInventory.digest, subject.build.replicas[1].outputInventory.digest)
+    assert.equal(Object.hasOwn(subject.build.replicas[0].runner, 'imageVersion'), false)
+    const firstRunnerObservation = JSON.parse(await readFile(summary.runnerObservationPath, 'utf8'))
+    assert.equal(firstRunnerObservation.workflow.runId, '123456')
+    assert.equal(firstRunnerObservation.replicas[0].runner.imageVersion, '20260719.1')
     assert.deepEqual(Object.keys(subject.workflow).sort(), [
       'path', 'repository', 'requestedRef', 'workflowSha',
     ])
@@ -159,9 +213,17 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       (dependency) => dependency.uri === 'mywallpaper:native-companion-build-config',
     ))
 
+    for (const replica of [1, 2]) {
+      await writeFile(
+        join(observations, `replica-${replica}`, 'replica.json'),
+        canonicalBytes(runnerObservation(replica, workflowSha, '20260720.1')),
+      )
+    }
     const rerunRoot = join(temporary, 'evidence-rerun')
     const rerunResult = spawnSync(process.execPath, argumentsFor(rerunRoot), { encoding: 'utf8' })
     assert.equal(rerunResult.status, 0, rerunResult.stderr)
+    const rerunSummary = JSON.parse(rerunResult.stdout)
+    assert.notEqual(summary.runnerObservationDigest, rerunSummary.runnerObservationDigest)
     const evidenceFiles = [
       'admission-subject-v1.json', 'author-inventory.json', 'bundle-index.json',
       'environment.json', 'lockfiles.json', 'payload-inventory.json',
@@ -204,6 +266,24 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       'repository', 'repositoryRef', 'workflowSha',
     ])
     assert.equal(nativeEvidence.artifacts.materialsDigest, digest(await readFile(materialsPath)))
+
+    const leakedSubjectPath = join(temporary, 'subject-with-volatile-runner-field.json')
+    const leakedSubject = JSON.parse(subjectBytes)
+    leakedSubject.build.replicas[0].runner.imageVersion = '20260719.1'
+    await writeFile(leakedSubjectPath, canonicalBytes(leakedSubject))
+    const rejectedVolatileLeak = spawnSync(process.execPath, [
+      nativeEvidenceScript,
+      '--subject', leakedSubjectPath,
+      '--addon-release-id', '019f0000-0000-7000-8000-000000000001',
+      '--license-spdx', 'MIT',
+      '--native-manifest-digest', digest(Buffer.from('native-manifest', 'utf8')),
+      '--materials-digest', digest(await readFile(materialsPath)),
+      '--materials-size', String((await readFile(materialsPath)).length),
+      '--workflow-sha', workflowSha,
+      '--output', join(temporary, 'rejected-native-build-evidence.json'),
+    ], { encoding: 'utf8' })
+    assert.notEqual(rejectedVolatileLeak.status, 0)
+    assert.match(rejectedVolatileLeak.stderr, /runner fields do not match/u)
 
     const drifted = join(temporary, 'drifted')
     await cp(reproduction, drifted, { recursive: true })

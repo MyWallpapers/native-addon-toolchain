@@ -35,8 +35,9 @@ The workflow builds one release bundle from the exact Git tag:
 10. transfer only deterministic bundle/materials parts and the public subject to a
     least-privilege Ubuntu publisher;
 11. create or strictly reuse a workflow-controlled draft release bound to the
-    triggering tag and commit, attest only the exact logical release ZIP through
-    GitHub/Sigstore, and validate that build proof;
+    triggering tag and commit, attach both the standard build provenance and a
+    custom volatile runner-observation attestation to the exact logical release
+    ZIP digest, and validate both GitHub/Sigstore proofs;
 12. attach every bundle/materials part under a root-and-part-content-addressed
     name, publish the draft, and require GitHub to re-read `immutable: true`
     before any MyWallpaper token is requested;
@@ -258,7 +259,13 @@ When `state == candidate`, the same Ubuntu job creates the exact
 volatile `attempt` object and a multipart `materialsArtifact` descriptor. The
 attempt binds the OIDC run ID/attempt and observes the publisher's actual
 `ImageOS`, `ImageVersion`, Node.js and PowerShell versions; those changing
-observations are stored outside immutable release materials. The backend
+observations are stored outside immutable release materials. A separate custom
+predicate, `github-hosted-runner-observation-v1`, binds that same run and
+bundle digest to both Windows replicas' actual `ImageOS`/`ImageVersion`,
+Node.js and PowerShell versions, default runner `rustc -vV`/`cargo -Vv`
+observations, available MSVC linker and complete Windows SDK versions, plus the
+exact pinned Windhawk clang/LLD executable digests and versions when hooks were
+built. The backend
 downloads every materials part and reconstructs the exact logical archive
 through GitHub. It uses the separate
 `mywallpaper-native-admission-development` or
@@ -297,7 +304,19 @@ only globally reviewed toolchain inputs: runner contract, pinned Node version,
 canonical CLI lock and exact workflow commit. The add-on manifest and committed
 companion commands remain signed source and provenance inputs, but never alter
 the server-allowlisted global environment digest. The floating runner image is
-recorded separately on each attempt.
+recorded separately on each attempt. It is never added to `environmentDigest`,
+so a GitHub image rollout neither masquerades as an immutable image pin nor
+changes deterministic materials already locked under a release tag.
+
+The Rust, MSVC and Windows SDK values inventory tools observable on the hosted
+runner; they do not claim that every add-on invoked each one. Rust is observed
+from the trusted toolchain checkout so a caller-controlled rustup override
+cannot rewrite this runner fact. The committed companion command and lockfiles
+remain the source of truth for caller-selected build tools, and both output
+trees must still be byte-identical. Conversely, for a Windhawk hook, the
+recorded clang and LLD are the exact verified, archive-locked executables used
+by the canonical hook build. A no-hook release records `used: false` instead
+of inventing compiler versions.
 
 After merging a reviewed toolchain revision, calculate the exact value to
 allowlist in MyWallpaper from that checkout:
@@ -314,12 +333,18 @@ logical, immutable materials archive contains:
 - `bundle-index.json`, canonical payload and author inventories;
 - the exact Git tree and tracked lockfile inventory;
 - the reviewed build-recipe descriptor, committed companion command/config and
-  both replica label/OS/architecture observations;
+  both stable replica label/OS/architecture contracts;
 - `sbom.cdx.json` and `provenance.intoto.json`;
 
 Actions artifacts are only internal job handoffs. The backend receives logical
 root/part descriptors and downloads persistent immutable release parts through
 GitHub's API.
+
+The volatile predicate is a separate one-run Actions handoff and custom
+GitHub/Sigstore attestation associated with `mywallpaper-addon-bundle.zip` by
+SHA-256. It is intentionally neither a release asset nor a member of the
+deterministic materials ZIP. A rerun can therefore produce a new observation
+attestation while strictly reusing the same immutable bundle and materials.
 
 The subject intentionally has no internal `addonReleaseId` because that UUID
 does not exist before ingestion. The trusted finalizer adds the returned UUID,

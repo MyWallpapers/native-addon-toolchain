@@ -83,15 +83,49 @@ try {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
     [ordered]@{
       schemaVersion = 1
+      contract = 'github-hosted-windows-build-observation-v1'
       replica = $replica
+      run = [ordered]@{ id = '123456'; attempt = '1' }
+      workflowSha = $workflowSha
       runner = [ordered]@{
         environment = 'github-hosted'
         label = 'windows-2025'
         operatingSystem = 'Windows'
         architecture = 'X64'
+        imageOs = 'win25'
+        imageVersion = '20260719.1'
       }
-      workflowSha = $workflowSha
-    } | ConvertTo-Json -Depth 8 -Compress |
+      tools = [ordered]@{
+        node = [ordered]@{ version = 'v22.22.3' }
+        powershell = [ordered]@{ version = '7.5.2' }
+        rust = [ordered]@{
+          rustc = [ordered]@{
+            sha256 = 'sha256:' + ''.PadLeft(64, '1')
+            version = "rustc 1.90.0 (fixture)`nhost: x86_64-pc-windows-msvc`nrelease: 1.90.0"
+          }
+          cargo = [ordered]@{
+            sha256 = 'sha256:' + ''.PadLeft(64, '2')
+            version = "cargo 1.90.0 (fixture)`nrelease: 1.90.0"
+          }
+        }
+        msvc = [ordered]@{
+          toolsetVersion = '14.44.35207'
+          linker = [ordered]@{
+            sha256 = 'sha256:' + ''.PadLeft(64, '3')
+            version = '14.44.35207'
+            fileVersion = '14.44.35207.1'
+          }
+        }
+        windowsSdk = [ordered]@{ availableVersions = @('10.0.26100.0') }
+        windhawk = [ordered]@{
+          used = $false
+          windhawkCommit = ''.PadLeft(40, '4')
+          archiveSha256 = 'sha256:' + ''.PadLeft(64, '5')
+          clang = $null
+          linker = $null
+        }
+      }
+    } | ConvertTo-Json -Depth 16 -Compress |
       Set-Content -LiteralPath "$directory/replica.json" -Encoding utf8NoBOM
   }
 
@@ -111,6 +145,9 @@ try {
       --release-ref refs/tags/v1.2.3 `
       --workflow-ref "MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@$workflowSha" `
       --workflow-sha $workflowSha `
+      --run-id 123456 `
+      --run-attempt 1 `
+      --runner-observation-output "$OutputRoot-runner-observation.json" `
       --operational-max-files 256 `
       --operational-max-expanded-bytes (32MB) `
       --operational-max-metadata-bytes (16MB) `

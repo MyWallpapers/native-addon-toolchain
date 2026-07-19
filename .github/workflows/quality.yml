@@ -39,6 +39,10 @@ jobs:
             '.github/scripts/create-admission-evidence.mjs',
             '.github/scripts/create-admission-evidence.test.mjs',
             '.github/scripts/create-native-build-evidence.mjs',
+            '.github/scripts/runner-observation.mjs',
+            '.github/scripts/runner-observation.test.mjs',
+            '.github/scripts/verify-runner-observation-predicate.mjs',
+            '.github/scripts/write-runner-observation.mjs',
             '.github/scripts/verify-admission-workflow.mjs'
           )) {
             node --check $script
@@ -56,6 +60,7 @@ jobs:
             '.github/scripts/package-addon-bundle.ps1',
             '.github/scripts/prepare-immutable-release.ps1',
             '.github/scripts/publish-release-assets.ps1',
+            '.github/scripts/record-replica-observation.ps1',
             '.github/scripts/release-artifact-contract.ps1',
             '.github/scripts/split-release-artifact.ps1',
             '.github/scripts/split-release-artifact.test.ps1',
@@ -75,6 +80,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence tests failed' }
           node --test .github/scripts/admission-environment.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 environment tests failed' }
+          node --test .github/scripts/runner-observation.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'runner observation contract tests failed' }
           & .github/scripts/package-admission-materials.test.ps1
           & .github/scripts/github-api-contract.test.ps1
           & .github/scripts/split-release-artifact.test.ps1
@@ -268,21 +275,17 @@ jobs:
           foreach ($replica in @(1, 2)) {
             $directory = Join-Path $observations "replica-$replica"
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
-            [ordered]@{
-              schemaVersion = 1
-              replica = $replica
-              runner = [ordered]@{
-                environment = 'github-hosted'
-                label = 'windows-2025'
-                operatingSystem = 'Windows'
-                architecture = 'X64'
-              }
-              workflowSha = $workflowSha
-            } | ConvertTo-Json -Depth 8 -Compress |
-              Set-Content -LiteralPath "$directory/replica.json" -Encoding utf8NoBOM
+            & .github/scripts/record-replica-observation.ps1 `
+              -Replica $replica `
+              -WorkflowSha $workflowSha `
+              -ToolchainRoot $env:GITHUB_WORKSPACE `
+              -CanonicalCliRoot "$env:RUNNER_TEMP/mywallpaper-cli" `
+              -HooksOutputRoot "$env:RUNNER_TEMP/build/hooks" `
+              -OutputPath "$directory/replica.json"
           }
 
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'admission-evidence'
+          $runnerObservation = Join-Path $env:RUNNER_TEMP 'quality-runner-observation-v1.json'
           $summaryJson = node .github/scripts/create-admission-evidence.mjs `
             --repository-root $source `
             --primary-root $primary `
@@ -298,6 +301,9 @@ jobs:
             --release-ref refs/tags/v0.0.0 `
             --workflow-ref "MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@$workflowSha" `
             --workflow-sha $workflowSha `
+            --run-id "$env:GITHUB_RUN_ID" `
+            --run-attempt "$env:GITHUB_RUN_ATTEMPT" `
+            --runner-observation-output $runnerObservation `
             --operational-max-files 512 `
             --operational-max-expanded-bytes (32MB) `
             --operational-max-metadata-bytes (16MB) `
@@ -308,6 +314,19 @@ jobs:
           if ($subjectDigest -cne $summary.subjectDigest -or $summary.authorInventory.fileCount -le 0) {
             throw 'Admission subject digest or author inventory is invalid'
           }
+          node .github/scripts/verify-runner-observation-predicate.mjs `
+            --input $runnerObservation `
+            --expected-digest $summary.runnerObservationDigest `
+            --repository-id $env:FIXTURE_REPOSITORY_ID `
+            --repository MyWallpapers/admission-fixture `
+            --commit-sha $commit `
+            --release-ref refs/tags/v0.0.0 `
+            --workflow-sha $workflowSha `
+            --run-id "$env:GITHUB_RUN_ID" `
+            --run-attempt "$env:GITHUB_RUN_ATTEMPT" `
+            --artifact-digest $summary.archiveDigest `
+            --distribution-digest $summary.distributionDigest
+          if ($LASTEXITCODE -ne 0) { throw 'Runner observation fixture verification failed' }
 
           $firstMaterials = Join-Path $env:RUNNER_TEMP 'admission-materials-first.zip'
           $secondMaterials = Join-Path $env:RUNNER_TEMP 'admission-materials-second.zip'

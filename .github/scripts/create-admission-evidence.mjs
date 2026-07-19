@@ -9,6 +9,11 @@ import {
   canonicalJsonDigest,
   createReviewedAdmissionEnvironment,
 } from './admission-environment.mjs'
+import {
+  createRunnerObservationPredicate,
+  runnerObservationDigest,
+  validateReplicaRunnerObservation,
+} from './runner-observation.mjs'
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u
@@ -22,7 +27,7 @@ const REQUIRED_OPTIONS = [
   'repository-root', 'primary-root', 'reproduction-root', 'replica-observations-root',
   'bundle-index', 'payload-inventory', 'archive', 'toolchain-root', 'repository-id',
   'repository-name', 'commit-sha', 'release-ref', 'workflow-ref', 'workflow-sha',
-  'output-root', 'operational-max-files',
+  'run-id', 'run-attempt', 'runner-observation-output', 'output-root', 'operational-max-files',
   'operational-max-expanded-bytes', 'operational-max-metadata-bytes',
 ]
 
@@ -226,24 +231,16 @@ async function findReplicaObservations(root, maximumMetadataBytes) {
       if (metadata.isSymbolicLink()) fail('Replica observations contain a link.')
       if (metadata.isDirectory()) pending.push(absolute)
       else if (metadata.isFile() && entry.name === 'replica.json') found.push(absolute)
-      else if (!metadata.isFile()) fail('Replica observations contain a non-regular entry.')
+      else if (metadata.isFile()) fail('Replica observations contain an unexpected file.')
+      else fail('Replica observations contain a non-regular entry.')
     }
   }
   if (found.length !== 2) fail('Exactly two replica observations are required.')
   const observations = []
   for (const path of found) {
-    const value = exactKeys(
+    observations.push(validateReplicaRunnerObservation(
       await readJson(path, 'replica observation', maximumMetadataBytes),
-      ['schemaVersion', 'replica', 'runner', 'workflowSha'],
-      'replica observation',
-    )
-    exactKeys(value.runner, ['environment', 'label', 'operatingSystem', 'architecture'], 'replica runner')
-    if (value.schemaVersion !== 1 || ![1, 2].includes(value.replica)
-      || value.runner.environment !== 'github-hosted' || value.runner.label !== 'windows-2025'
-      || value.runner.operatingSystem !== 'Windows' || value.runner.architecture !== 'X64') {
-      fail('Replica observation is outside the reviewed GitHub-hosted Windows policy.')
-    }
-    observations.push(value)
+    ))
   }
   observations.sort((left, right) => left.replica - right.replica)
   if (observations[0].replica !== 1 || observations[1].replica !== 2) fail('Replica identities are invalid.')
@@ -315,6 +312,14 @@ async function main() {
   const repositoryName = requiredString(options['repository-name'], 'repository name', REPOSITORY_PATTERN, 140)
   const commitSha = requiredString(options['commit-sha'], 'commit SHA', COMMIT_PATTERN, 40)
   const workflowSha = requiredString(options['workflow-sha'], 'workflow SHA', COMMIT_PATTERN, 40)
+  const runId = requiredString(options['run-id'], 'workflow run ID', /^[1-9][0-9]*$/u, 32)
+  const runAttempt = requiredString(options['run-attempt'], 'workflow run attempt', /^[1-9][0-9]*$/u, 16)
+  const runnerObservationOutput = resolve(options['runner-observation-output'])
+  const runnerOutputFromEvidence = relative(outputRoot, runnerObservationOutput)
+  if (runnerOutputFromEvidence === '' || (!isAbsolute(runnerOutputFromEvidence)
+    && runnerOutputFromEvidence !== '..' && !runnerOutputFromEvidence.startsWith(`..${sep}`))) {
+    fail('Volatile runner observations must remain outside immutable admission materials.')
+  }
   const operationalBudget = {
     files: positiveSafeInteger(options['operational-max-files'], 'operational file budget'),
     expandedBytes: positiveSafeInteger(
@@ -375,9 +380,21 @@ async function main() {
   if (observations.some((observation) => observation.workflowSha !== workflowSha)) {
     fail('Replica observation workflow SHA differs from the resolved workflow.')
   }
+  if (observations.some((observation) => observation.run.id !== runId
+    || observation.run.attempt !== runAttempt)) {
+    fail('Replica observation workflow attempt differs from the current run.')
+  }
   const replicas = observations.map((observation) => ({
     replica: observation.replica,
-    runner: observation.runner,
+    // Mutable hosted-image and tool versions belong to the per-attempt signed
+    // predicate below, never to immutable release materials. Keep only the
+    // reviewed platform contract in the stable subject and SLSA statement.
+    runner: {
+      environment: observation.runner.environment,
+      label: observation.runner.label,
+      operatingSystem: observation.runner.operatingSystem,
+      architecture: observation.runner.architecture,
+    },
     outputInventory: observation.replica === 1 ? primary.summary : reproduction.summary,
   }))
 
@@ -596,8 +613,25 @@ async function main() {
       provenanceDigest,
     },
   }
+  const runnerObservationPredicate = createRunnerObservationPredicate({
+    observations,
+    repositoryId,
+    repository: repositoryName,
+    commitSha,
+    releaseRef,
+    workflowSha,
+    runId,
+    runAttempt,
+    artifactDigest: archiveDigest,
+    distributionDigest,
+  })
   const subjectPath = join(outputRoot, 'admission-subject-v1.json')
   await writeCanonical(subjectPath, subject, operationalBudget.metadataBytes)
+  await writeCanonical(
+    runnerObservationOutput,
+    runnerObservationPredicate,
+    operationalBudget.metadataBytes,
+  )
   process.stdout.write(`${JSON.stringify({
     subjectPath,
     subjectDigest: digestJson(subject),
@@ -607,6 +641,8 @@ async function main() {
     lockfilesDigest: lockfiles.digest,
     sbomDigest,
     provenanceDigest,
+    runnerObservationPath: runnerObservationOutput,
+    runnerObservationDigest: runnerObservationDigest(runnerObservationPredicate),
     authorInventory,
   })}\n`)
 }
