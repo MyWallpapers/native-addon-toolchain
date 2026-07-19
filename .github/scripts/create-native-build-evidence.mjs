@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto'
-import { lstat, readFile, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
+import { readBoundedJson } from './safe-files.mjs'
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u
@@ -76,15 +77,7 @@ function requiredString(value, label, pattern, maximum = 1024) {
 }
 
 async function readJson(path, label) {
-  const metadata = await lstat(path)
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0 || metadata.size > 1024 * 1024) {
-    fail(`${label} must be a bounded regular file.`)
-  }
-  try {
-    return JSON.parse(await readFile(path, 'utf8'))
-  } catch {
-    fail(`${label} is not valid JSON.`)
-  }
+  return readBoundedJson(path, { label, maximumBytes: 1024 * 1024 })
 }
 
 async function main() {

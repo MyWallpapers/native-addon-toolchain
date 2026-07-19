@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { lstat, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
@@ -14,6 +13,11 @@ import {
   runnerObservationDigest,
   validateReplicaRunnerObservation,
 } from './runner-observation.mjs'
+import {
+  digestBoundedRegularFile,
+  readBoundedJson,
+  readBoundedRegularFile,
+} from './safe-files.mjs'
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u
@@ -93,17 +97,6 @@ function digestJson(value) {
   return digestBytes(canonicalJsonBytes(value))
 }
 
-async function digestFile(path) {
-  const hash = createHash('sha256')
-  await new Promise((resolvePromise, rejectPromise) => {
-    const stream = createReadStream(path)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('error', rejectPromise)
-    stream.on('end', resolvePromise)
-  })
-  return `sha256:${hash.digest('hex')}`
-}
-
 function requiredString(value, label, pattern, maximum = 1024) {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum
     || value.includes('\0') || (pattern && !pattern.test(value))) {
@@ -158,16 +151,7 @@ function runGit(repositoryRoot, args, label, maximumBytes) {
 }
 
 async function readJson(path, label, maximumBytes) {
-  const metadata = await lstat(path)
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0
-    || metadata.size > maximumBytes) {
-    fail(`${label} must be a bounded regular file.`)
-  }
-  try {
-    return JSON.parse(await readFile(path, 'utf8'))
-  } catch {
-    fail(`${label} is not valid JSON.`)
-  }
+  return readBoundedJson(path, { label, maximumBytes })
 }
 
 async function writeCanonical(path, value, maximumBytes) {
@@ -199,12 +183,17 @@ async function inventoryTree(root, label, operationalBudget) {
       if (files.length >= operationalBudget.files) {
         fail(`${label} exhausted the runner operational file budget.`)
       }
-      totalBytes = addChecked(totalBytes, metadata.size, `${label} byte count`)
+      const file = await digestBoundedRegularFile(absolute, {
+        label: `${label} file`,
+        minimumBytes: 0,
+        maximumBytes: operationalBudget.expandedBytes,
+      })
+      totalBytes = addChecked(totalBytes, file.sizeBytes, `${label} byte count`)
       if (totalBytes > operationalBudget.expandedBytes) {
         fail(`${label} exhausted the runner operational expanded-byte budget.`)
       }
       const path = safePortablePath(relative(root, absolute).split(sep).join('/'), `${label} path`)
-      files.push({ path, sizeBytes: metadata.size, sha256: await digestFile(absolute) })
+      files.push({ path, sizeBytes: file.sizeBytes, sha256: file.sha256 })
     }
   }
   files.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
@@ -268,11 +257,16 @@ async function trackedLockfiles(repositoryRoot, commitSha, operationalBudget) {
     const absolute = inside(repositoryRoot, join(repositoryRoot, ...path.split('/')), 'lockfile')
     const metadata = await lstat(absolute)
     if (!metadata.isFile() || metadata.isSymbolicLink()) fail(`Lockfile is invalid: ${path}`)
-    totalBytes = addChecked(totalBytes, metadata.size, 'Lockfile byte count')
+    const file = await digestBoundedRegularFile(absolute, {
+      label: `lockfile ${path}`,
+      minimumBytes: 0,
+      maximumBytes: operationalBudget.expandedBytes,
+    })
+    totalBytes = addChecked(totalBytes, file.sizeBytes, 'Lockfile byte count')
     if (totalBytes > operationalBudget.expandedBytes) {
       fail('Lockfile inventory exhausted the runner operational expanded-byte budget.')
     }
-    files.push({ path, sizeBytes: metadata.size, sha256: await digestFile(absolute) })
+    files.push({ path, sizeBytes: file.sizeBytes, sha256: file.sha256 })
   }
   const document = { schemaVersion: 1, files }
   return { document, digest: digestJson(document) }
@@ -360,9 +354,11 @@ async function main() {
     || provenance.commitSha !== commitSha || !SHA256_PATTERN.test(bundleIndex.sourceDigest)
     || !SHA256_PATTERN.test(bundleIndex.manifestDigest)) fail('Bundle index provenance is inconsistent.')
   const distributionDigest = digestJson(bundleIndex)
-  const archiveMetadata = await stat(options.archive)
-  if (!archiveMetadata.isFile() || archiveMetadata.size <= 0) fail('Release archive is invalid.')
-  const archiveDigest = await digestFile(options.archive)
+  const archive = await digestBoundedRegularFile(options.archive, {
+    label: 'release archive',
+    maximumBytes: operationalBudget.expandedBytes,
+  })
+  const archiveDigest = archive.sha256
 
   const primary = await inventoryTree(options['primary-root'], 'primary replica', operationalBudget)
   const reproduction = await inventoryTree(
@@ -433,16 +429,18 @@ async function main() {
     'canonical CLI lock',
     operationalBudget.metadataBytes,
   )
-  const nodeVersion = (await readFile(join(toolchainRoot, '.nvmrc'), 'utf8')).trim()
+  const nodeVersion = (await readBoundedRegularFile(join(toolchainRoot, '.nvmrc'), {
+    label: 'pinned Node.js version',
+    maximumBytes: 32,
+  })).toString('utf8').trim()
   requiredString(nodeVersion, 'pinned Node.js version', /^[0-9]+\.[0-9]+\.[0-9]+$/u, 32)
   let companionBuildConfig = null
   const companionConfigPath = join(repositoryRoot, 'mywallpaper.config.json')
   try {
-    const metadata = await lstat(companionConfigPath)
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0
-      || metadata.size > operationalBudget.metadataBytes) {
-      fail('Committed native companion build configuration is not a bounded regular file.')
-    }
+    const bytes = await readBoundedRegularFile(companionConfigPath, {
+      label: 'Committed native companion build configuration',
+      maximumBytes: operationalBudget.metadataBytes,
+    })
     const tracked = runGit(
       repositoryRoot,
       ['ls-files', '--error-unmatch', '--', 'mywallpaper.config.json'],
@@ -450,7 +448,6 @@ async function main() {
       operationalBudget.metadataBytes,
     ).toString('utf8').trim()
     if (tracked !== 'mywallpaper.config.json') fail('Native companion build configuration is not tracked exactly.')
-    const bytes = await readFile(companionConfigPath)
     let definition
     try { definition = plainRecord(JSON.parse(bytes.toString('utf8')), 'native companion build configuration') }
     catch { fail('Native companion build configuration is not valid JSON.') }
@@ -597,7 +594,7 @@ async function main() {
     },
     artifact: {
       name: 'mywallpaper-addon-bundle.zip',
-      sizeBytes: archiveMetadata.size,
+      sizeBytes: archive.sizeBytes,
       sha256: archiveDigest,
     },
     build: {
