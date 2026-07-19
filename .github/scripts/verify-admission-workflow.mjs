@@ -119,6 +119,27 @@ requireText(
 const build = section(workflow, '  build-untrusted:', '  verify-package:')
 const verifier = section(workflow, '  verify-package:', '  attest-publish:')
 const publisher = section(workflow, '  attest-publish:')
+const splitTransportStep = section(
+  verifier,
+  '      - name: Split logical archives into deterministic release parts',
+  '      - name: Stage the public admission subject',
+)
+const reproduceTransportStep = section(
+  publisher,
+  '      - name: Reproduce both logical archives from deterministic parts',
+  '      - name: Verify the admission subject as an opaque file',
+)
+for (const [step, script, label] of [
+  [splitTransportStep, 'split-release-artifact.ps1', 'release transport splitting'],
+  [reproduceTransportStep, 'verify-release-artifact-parts.ps1', 'release transport verification'],
+]) {
+  if (step.split(script).length - 1 !== 2) {
+    fail(`Both logical archives must use the reviewed ${label} script.`)
+  }
+  if (step.includes('$LASTEXITCODE')) {
+    fail(`PowerShell ${label} must rely on terminating errors, not residual $LASTEXITCODE state.`)
+  }
+}
 for (const [name, value] of [['build', build], ['verifier', verifier], ['publisher', publisher]]) {
   requireText(value, "RUNNER_ENVIRONMENT: ${{ runner.environment }}", `${name} GitHub-hosted runner observation`)
   requireText(value, "-cne 'github-hosted'", `${name} fail-closed runner guard`)

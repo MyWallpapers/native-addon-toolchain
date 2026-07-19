@@ -492,7 +492,6 @@ jobs:
             -OutputRoot $bundleRoot `
             -PartSizeBytes $env:RELEASE_PART_SIZE_BYTES `
             -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
-          if ($LASTEXITCODE -ne 0) { throw 'Bundle release transport splitting failed' }
           $bundle = $bundleJson | ConvertFrom-Json
           $materialsJson = & toolchain/.github/scripts/split-release-artifact.ps1 `
             -SourcePath "$env:RUNNER_TEMP/mywallpaper-admission-materials.zip" `
@@ -502,7 +501,6 @@ jobs:
             -OutputRoot $materialsRoot `
             -PartSizeBytes $env:RELEASE_PART_SIZE_BYTES `
             -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
-          if ($LASTEXITCODE -ne 0) { throw 'Materials release transport splitting failed' }
           $materials = $materialsJson | ConvertFrom-Json
           $totalParts = [long]$bundle.partCount + [long]$materials.partCount
           if ($totalParts -lt 2 -or $totalParts -gt [long]$env:OPERATIONAL_MAX_RELEASE_ASSETS) {
@@ -666,7 +664,6 @@ jobs:
             -ExpectedDigest $env:EXPECTED_BUNDLE_SHA256 `
             -ExpectedSize $env:EXPECTED_BUNDLE_SIZE `
             -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
-          if ($LASTEXITCODE -ne 0) { throw 'Bundle part verification failed' }
           $bundle = $bundleJson | ConvertFrom-Json
           $materialsJson = & toolchain/.github/scripts/verify-release-artifact-parts.ps1 `
             -TransportRoot "$env:RUNNER_TEMP/mywallpaper-materials-transport" `
@@ -674,7 +671,6 @@ jobs:
             -ExpectedDigest $env:EXPECTED_MATERIALS_SHA256 `
             -ExpectedSize $env:EXPECTED_MATERIALS_SIZE `
             -OperationalMaxParts $env:OPERATIONAL_MAX_RELEASE_ASSETS
-          if ($LASTEXITCODE -ne 0) { throw 'Materials part verification failed' }
           $materials = $materialsJson | ConvertFrom-Json
           $totalParts = [long]$bundle.partCount + [long]$materials.partCount
           if ($totalParts -lt 2 -or $totalParts -gt [long]$env:OPERATIONAL_MAX_RELEASE_ASSETS) {
