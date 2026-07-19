@@ -65,6 +65,14 @@ const releaseOnMainVerifier = await readFile(
   resolve(dirname(path), '../scripts/assert-release-on-default-branch.mjs'),
   'utf8',
 )
+const immutableCheckout = await readFile(
+  resolve(dirname(path), '../scripts/materialize-immutable-repository.ps1'),
+  'utf8',
+)
+const safeFiles = await readFile(
+  resolve(dirname(path), '../scripts/safe-files.mjs'),
+  'utf8',
+)
 const pushTagGuard = "github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')"
 requireText(workflow, 'name: MyWallpaper add-on admission-v1', 'the versioned contract name')
 requireText(workflow, 'workflow_call:', 'the reusable workflow trigger')
@@ -72,6 +80,62 @@ requireText(workflow, pushTagGuard, 'the newly-created v-prefixed tag guard')
 requireText(workflow, 'replica: [1, 2]', 'exactly two build replicas')
 requireText(workflow, 'runs-on: windows-2025', 'the reviewed Windows build image')
 requireText(workflow, 'runs-on: ubuntu-24.04', 'the data-only Ubuntu publisher image')
+if (workflow.includes('uses: actions/checkout@')) {
+  fail('Reusable admission jobs must materialize exact commits without the checkout action data-flow ambiguity.')
+}
+if ((workflow.match(/https:\/\/github\.com\/MyWallpapers\/native-addon-toolchain\.git/gu) ?? []).length !== 3) {
+  fail('Every job must fetch only the static trusted toolchain repository.')
+}
+for (const [fragment, label] of [
+  ['GIT_CONFIG_NOSYSTEM', 'system Git configuration isolation'],
+  ['GIT_CONFIG_GLOBAL', 'global Git configuration isolation'],
+  ['credential.helper=', 'credential-free Git transport'],
+  ['http.followRedirects=false', 'Git redirect refusal'],
+  ['remote remove origin', 'post-checkout remote removal'],
+]) {
+  if (workflow.split(fragment).length - 1 !== 3) {
+    fail(`Every trusted toolchain materialization needs ${label}.`)
+  }
+}
+for (const [fragment, label] of [
+  ['GIT_CONFIG_NOSYSTEM', 'system Git configuration isolation'],
+  ['GIT_CONFIG_GLOBAL', 'global Git configuration isolation'],
+  ['credential.helper=', 'credential-free Git transport'],
+  ['http.followRedirects=false', 'Git redirect refusal'],
+  ["'fetch', '--quiet', '--no-tags', '--depth=1'", 'single-commit immutable Git fetch'],
+  ["'remote', 'remove', 'origin'", 'post-checkout remote removal'],
+]) requireText(immutableCheckout, fragment, label)
+if (immutableCheckout.includes('GITHUB_TOKEN') || immutableCheckout.includes('github.token')) {
+  fail('Immutable public-source materialization must not receive a GitHub credential.')
+}
+for (const [fragment, label] of [
+  ['handle.readFile()', 'descriptor-bound reads'],
+  ['await handle.read(buffer, 0, length, position)', 'descriptor-bound streaming digests'],
+  ['constants.O_NOFOLLOW', 'no-follow file opening'],
+  ['sameContentVersion(opened, afterRead)', 'concurrent file-change detection'],
+  ['sameIdentity(opened, pathAfterRead)', 'post-read path identity verification'],
+]) requireText(safeFiles, fragment, label)
+
+const lines = workflow.replaceAll('\r\n', '\n').split('\n')
+const runBodies = []
+for (let index = 0; index < lines.length; index += 1) {
+  const match = /^(\s*)run:\s*\|\s*$/u.exec(lines[index])
+  if (!match) continue
+  const indentation = match[1].length
+  const body = []
+  for (index += 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.trim() !== '' && line.match(/^\s*/u)[0].length <= indentation) {
+      index -= 1
+      break
+    }
+    body.push(line)
+  }
+  runBodies.push(body.join('\n'))
+}
+if (runBodies.some((body) => body.includes('${{'))) {
+  fail('Shell bodies must consume GitHub and step values only through environment variables.')
+}
 if ((workflow.match(/\$env:WORKFLOW_REF -cne "\$prefix\$env:WORKFLOW_SHA"/gu) ?? []).length !== 3) {
   fail('Every job must require the exact full reusable-workflow SHA reference.')
 }
@@ -157,6 +221,19 @@ for (const [fragment, label] of [
 const build = section(workflow, '  build-untrusted:', '  verify-package:')
 const verifier = section(workflow, '  verify-package:', '  attest-publish:')
 const publisher = section(workflow, '  attest-publish:')
+requireText(
+  build,
+  'Materialize isolated immutable caller copies without credentials',
+  'separate untrusted build copies',
+)
+requireText(
+  verifier,
+  'Materialize the immutable caller source without credentials',
+  'immutable verifier source materialization',
+)
+if (publisher.includes('materialize-immutable-repository.ps1')) {
+  fail('The privileged publisher must never materialize caller-controlled source.')
+}
 const splitTransportStep = section(
   verifier,
   '      - name: Split logical archives into deterministic release parts',

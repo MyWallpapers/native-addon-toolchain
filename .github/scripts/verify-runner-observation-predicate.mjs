@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { lstat, readFile } from 'node:fs/promises'
 import {
   runnerObservationDigest,
   validateRunnerObservationPredicate,
 } from './runner-observation.mjs'
+import { readBoundedJson } from './safe-files.mjs'
 
 const REQUIRED_OPTIONS = [
   'input', 'expected-digest', 'repository-id', 'repository', 'commit-sha', 'release-ref',
@@ -30,16 +30,10 @@ function parseArguments(argv) {
 }
 
 const options = parseArguments(process.argv.slice(2))
-const metadata = await lstat(options.input)
-if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0 || metadata.size > 16 * 1024 * 1024) {
-  fail('Runner observation predicate must be a bounded regular file.')
-}
-let raw
-try {
-  raw = JSON.parse(await readFile(options.input, 'utf8'))
-} catch {
-  fail('Runner observation predicate is not valid JSON.')
-}
+const raw = await readBoundedJson(options.input, {
+  label: 'Runner observation predicate',
+  maximumBytes: 16 * 1024 * 1024,
+})
 const predicate = validateRunnerObservationPredicate(raw)
 const actualDigest = runnerObservationDigest(predicate)
 if (actualDigest !== options['expected-digest']

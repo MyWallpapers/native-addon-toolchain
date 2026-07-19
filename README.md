@@ -15,13 +15,15 @@ caller code and is checked again immediately before GitHub Release publication:
 
 1. rebuild web, companion and hook outputs twice in two independent,
    disposable GitHub-hosted Windows 2025 VMs;
-2. use separate pristine checkouts for hooks, companions and web inside each
-   replica, and upload hooks and companions before installing web dependencies;
+2. materialize separate pristine, credential-free Git repositories for hooks,
+   companions and web at the exact caller commit inside each replica, and upload
+   hooks and companions before installing web dependencies;
 3. install the locked JavaScript dependency graph only after native outputs
    have left the replica;
 4. transfer only those untrusted outputs to a distinct Windows verification job
    with no OIDC permission;
-5. check out the source and the exact called-workflow SHA again, verify the
+5. materialize the source and exact called-workflow SHA again without persisted
+   credentials, verify the
    content-addressed release validator exported from MyWallpaper, require both web
    and native reproductions to be byte-identical, then
    validate the `canvas-v1` manifest, root `LICENSE`, author thumbnail and
@@ -57,8 +59,10 @@ companion and hook reproduction must match by relative path, byte size and
 SHA-256. The verifier treats transferred outputs as data and is the sole writer
 of the archive and subject. The Ubuntu publisher only downloads opaque files,
 checks their size, SHA-256 and cross-bindings, and never checks out or extracts
-add-on source. It checks out only the trusted toolchain at `job.workflow_sha`
-for the evidence transformation. Development and production use separate
+add-on source. It materializes only the static trusted toolchain repository at
+the validated `job.workflow_sha`, with system/global Git configuration disabled,
+hooks disabled, redirects refused and the remote removed immediately after the
+exact commit is verified. Development and production use separate
 hardcoded endpoints and audiences; a caller can choose the channel, but cannot
 supply an upload URL.
 
