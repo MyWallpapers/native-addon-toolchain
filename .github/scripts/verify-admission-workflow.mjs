@@ -103,10 +103,13 @@ for (const [fragment, label] of [
   ['credential.helper=', 'credential-free Git transport'],
   ['http.followRedirects=false', 'Git redirect refusal'],
   ["'fetch', '--quiet', '--no-tags', '--depth=1'", 'single-commit immutable Git fetch'],
-  ["'remote', 'remove', 'origin'", 'post-checkout remote removal'],
+  ["'remote', 'set-url', 'origin'", 'canonical public provenance origin'],
 ]) requireText(immutableCheckout, fragment, label)
 if (immutableCheckout.includes('GITHUB_TOKEN') || immutableCheckout.includes('github.token')) {
   fail('Immutable public-source materialization must not receive a GitHub credential.')
+}
+if (immutableCheckout.includes("'remote', 'remove', 'origin'")) {
+  fail('Immutable caller materialization must retain its credential-free canonical public origin for provenance validation.')
 }
 for (const [fragment, label] of [
   ['handle.readFile()', 'descriptor-bound reads'],
