@@ -87,6 +87,14 @@ requires two independent rebuilds to produce byte-identical outputs, and hashes
 every resulting byte; it does not claim that output equality proves source-only
 or offline compilation.
 
+Each isolated caller checkout retains exactly one Git remote after the immutable
+fetch: the credential-free canonical public URL
+`https://github.com/<owner>/<repository>.git`. The canonical CLI uses this URL
+to bind the declared repository identity to the rebuilt source. Hooks remain
+disabled, Git credentials remain unavailable, redirects remain refused during
+fetch, and no caller-provided remote URL is retained. Trusted toolchain
+checkouts in privileged jobs still remove their own remote after verification.
+
 ## Caller
 
 GitHub attributes every GitHub-hosted runner execution of a reusable workflow

@@ -50,9 +50,10 @@ try {
   $hooksPath = Join-Path $destinationPath '.git/mywallpaper-disabled-hooks'
   New-Item -ItemType Directory -Path $hooksPath | Out-Null
   Invoke-IsolatedGit @('-C', $destinationPath, 'config', 'core.hooksPath', $hooksPath)
+  $canonicalOrigin = "https://github.com/$Repository.git"
   Invoke-IsolatedGit @(
     '-C', $destinationPath,
-    'remote', 'add', 'origin', "https://github.com/$Repository.git"
+    'remote', 'add', 'origin', $canonicalOrigin
   )
   Invoke-IsolatedGit @(
     '-C', $destinationPath,
@@ -75,7 +76,22 @@ try {
   if ($LASTEXITCODE -ne 0 -or $changes.Count -ne 0) {
     throw 'Immutable checkout is not a clean representation of the requested commit'
   }
-  Invoke-IsolatedGit @('-C', $destinationPath, 'remote', 'remove', 'origin')
+  # The canonical CLI needs the repository identity to prove that the checked
+  # out source belongs to the declared public GitHub repository. Keep only the
+  # credential-free canonical origin after the immutable fetch; never retain a
+  # caller-provided URL or a credential helper.
+  Invoke-IsolatedGit @(
+    '-C', $destinationPath,
+    'remote', 'set-url', 'origin', $canonicalOrigin
+  )
+  $remoteNames = @(& git -C $destinationPath remote)
+  if ($LASTEXITCODE -ne 0 -or $remoteNames.Count -ne 1 -or $remoteNames[0] -cne 'origin') {
+    throw 'Immutable checkout retained an unexpected Git remote'
+  }
+  $originUrls = @(& git -C $destinationPath remote get-url --all origin)
+  if ($LASTEXITCODE -ne 0 -or $originUrls.Count -ne 1 -or $originUrls[0] -cne $canonicalOrigin) {
+    throw 'Immutable checkout origin is not the credential-free canonical public URL'
+  }
 } finally {
   foreach ($name in $savedEnvironment.Keys) {
     [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
