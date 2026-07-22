@@ -11,6 +11,11 @@ on:
 
 permissions: {}
 
+env:
+  # Operational capacity of one admission workspace. This is deliberately a
+  # reviewed workflow value rather than an author-controlled input.
+  ADMISSION_WORKSPACE_BUDGET_BYTES: '4294967296'
+
 jobs:
   build-untrusted:
     name: Rebuild untrusted release (${{ matrix.replica }}/2)
@@ -357,10 +362,12 @@ jobs:
           CALLER_REPOSITORY_NAME: ${{ github.event.repository.name }}
           CALLER_REPOSITORY_OWNER: ${{ github.repository_owner }}
           CALLER_REF_TYPE: ${{ github.ref_type }}
-          OPERATIONAL_MAX_ARCHIVE_BYTES: '4294967296'
-          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
-          OPERATIONAL_MAX_FILES: '100000'
         run: |
+          $workspaceBudget = 0L
+          if (-not [long]::TryParse($env:ADMISSION_WORKSPACE_BUDGET_BYTES, [ref]$workspaceBudget) -or $workspaceBudget -le 0) {
+            throw 'ADMISSION_WORKSPACE_BUDGET_BYTES must be a positive byte count'
+          }
+          $fileBudget = [Math]::Max(1L, [long]($workspaceBudget / 4096L))
           if ($env:CALLER_REF_TYPE -ne 'tag') { throw 'Add-on releases require a Git tag' }
           $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-output'
           $reproduction = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-reproduction'
@@ -406,8 +413,8 @@ jobs:
           & toolchain/.github/scripts/materialize-addon-build.ps1 `
             -BuildRoot $output `
             -RepositoryRoot caller `
-            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
-            -OperationalMaxBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES
+            -OperationalMaxFiles $fileBudget `
+            -OperationalMaxBytes $workspaceBudget
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" generate --directory caller
           if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check --json --directory caller
@@ -428,9 +435,9 @@ jobs:
             -RepositoryName $env:CALLER_REPOSITORY_NAME `
             -CommitSha $env:CALLER_COMMIT_SHA `
             -OutputArchive $archive `
-            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
-            -OperationalMaxExpandedBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
-            -OperationalMaxArchiveBytes $env:OPERATIONAL_MAX_ARCHIVE_BYTES `
+            -OperationalMaxFiles $fileBudget `
+            -OperationalMaxExpandedBytes $workspaceBudget `
+            -OperationalMaxArchiveBytes $workspaceBudget `
             -AdmissionMetadataRoot $metadataRoot
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "metadata-root=$metadataRoot" >> $env:GITHUB_OUTPUT
@@ -443,14 +450,17 @@ jobs:
           CALLER_REF: ${{ github.ref }}
           CALLER_REPOSITORY: ${{ github.repository }}
           CALLER_REPOSITORY_ID: ${{ github.repository_id }}
-          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
-          OPERATIONAL_MAX_FILES: '100000'
-          OPERATIONAL_MAX_METADATA_BYTES: '536870912'
           EXPECTED_ARCHIVE_SHA256: ${{ steps.package.outputs.archive-sha256 }}
           EXPECTED_DISTRIBUTION_DIGEST: ${{ steps.package.outputs.distribution-digest }}
           WORKFLOW_REF: ${{ job.workflow_ref }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
+          $workspaceBudget = 0L
+          if (-not [long]::TryParse($env:ADMISSION_WORKSPACE_BUDGET_BYTES, [ref]$workspaceBudget) -or $workspaceBudget -le 0) {
+            throw 'ADMISSION_WORKSPACE_BUDGET_BYTES must be a positive byte count'
+          }
+          $fileBudget = [Math]::Max(1L, [long]($workspaceBudget / 4096L))
+          $metadataBudget = [Math]::Max(1L, [long]($workspaceBudget / 8L))
           if ($env:EXPECTED_ARCHIVE_SHA256 -cnotmatch '^sha256:[0-9a-f]{64}$' -or
               $env:EXPECTED_DISTRIBUTION_DIGEST -cnotmatch '^sha256:[0-9a-f]{64}$' -or
               $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
@@ -479,9 +489,9 @@ jobs:
             --run-id $env:GITHUB_RUN_ID `
             --run-attempt $env:GITHUB_RUN_ATTEMPT `
             --runner-observation-output $runnerObservation `
-            --operational-max-files $env:OPERATIONAL_MAX_FILES `
-            --operational-max-expanded-bytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
-            --operational-max-metadata-bytes $env:OPERATIONAL_MAX_METADATA_BYTES `
+            --operational-max-files $fileBudget `
+            --operational-max-expanded-bytes $workspaceBudget `
+            --operational-max-metadata-bytes $metadataBudget `
             --output-root $evidenceRoot
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence generation failed' }
           $summary = $summaryJson | ConvertFrom-Json
@@ -507,18 +517,19 @@ jobs:
       - name: Package deterministic admission materials
         id: materials
         shell: pwsh
-        env:
-          OPERATIONAL_MAX_ARCHIVE_BYTES: '4294967296'
-          OPERATIONAL_MAX_EXPANDED_BYTES: '4294967296'
-          OPERATIONAL_MAX_FILES: '100000'
         run: |
+          $workspaceBudget = 0L
+          if (-not [long]::TryParse($env:ADMISSION_WORKSPACE_BUDGET_BYTES, [ref]$workspaceBudget) -or $workspaceBudget -le 0) {
+            throw 'ADMISSION_WORKSPACE_BUDGET_BYTES must be a positive byte count'
+          }
+          $fileBudget = [Math]::Max(1L, [long]($workspaceBudget / 4096L))
           $evidenceRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-evidence'
           & toolchain/.github/scripts/package-admission-materials.ps1 `
             -EvidenceRoot $evidenceRoot `
             -OutputArchive "$env:RUNNER_TEMP/mywallpaper-admission-materials.zip" `
-            -OperationalMaxFiles $env:OPERATIONAL_MAX_FILES `
-            -OperationalMaxExpandedBytes $env:OPERATIONAL_MAX_EXPANDED_BYTES `
-            -OperationalMaxArchiveBytes $env:OPERATIONAL_MAX_ARCHIVE_BYTES
+            -OperationalMaxFiles $fileBudget `
+            -OperationalMaxExpandedBytes $workspaceBudget `
+            -OperationalMaxArchiveBytes $workspaceBudget
 
       - name: Split logical archives into deterministic release parts
         id: transport

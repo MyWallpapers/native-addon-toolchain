@@ -197,15 +197,16 @@ Every release carries a regular root `LICENSE` file containing non-empty,
 NUL-free UTF-8 text (maximum 1 MiB). It is hashed in the immutable bundle
 inventory alongside the author thumbnail and executable payload.
 
-The packagers have no embedded SDK/package quota. The reviewed workflow passes
-an explicit GitHub-runner resource budget of 100,000 archive entries, 4 GiB
-expanded bytes, 4 GiB per logical archive and 512 MiB for each canonical
-metadata/Git-output buffer. Each logical archive is split at deterministic
+The packagers have no embedded SDK/package quota. Every job inherits one
+reviewed `ADMISSION_WORKSPACE_BUDGET_BYTES` value (currently 4 GiB). Archive,
+expanded-file and parser work are charged to that capacity; file-accounting
+and metadata-memory safety are derived from it rather than exposed as separate
+product limits. Each logical archive is split at deterministic
 1 GiB boundaries. Every physical part must remain strictly below GitHub's
 2 GiB per-asset transport ceiling, and the bundle plus materials must contain
 at most GitHub's external limit of 1,000 release assets. These are operational
-and platform fail-safe values,
-not add-on entitlements; changing them requires the normal reviewed-workflow
+and platform fail-safe values, not add-on entitlements; changing them requires
+the normal reviewed-workflow
 SHA rollout. Integer additions are checked and archive contents are streamed.
 Portable-path, regular-file/link, UTF-8 license and deterministic-archive rules
 remain integrity constraints rather than product consumption limits. There is
