@@ -13,7 +13,7 @@ if ($LASTEXITCODE -ne 0 -or $ActualCommit -cne $SourceCommit) {
   throw 'MyWallpaper checkout does not match SourceCommit'
 }
 $Remote = (& git -C $MyWallpaperRoot remote get-url origin).Trim()
-if ($LASTEXITCODE -ne 0 -or $Remote -notmatch '^(?:git@github\.com:|https://github\.com/)MyWallpapers/MyWallpaper(?:\.git)?$') {
+if ($LASTEXITCODE -ne 0 -or $Remote -notmatch '^(?:git@github\.com:|ssh://git@ssh\.github\.com(?::443)?/|https://github\.com/)MyWallpapers/MyWallpaper(?:\.git)?$') {
   throw 'Canonical release validator must be exported from MyWallpapers/MyWallpaper'
 }
 $Status = (& git -C $MyWallpaperRoot status --porcelain=v1 --untracked-files=all) -join "`n"

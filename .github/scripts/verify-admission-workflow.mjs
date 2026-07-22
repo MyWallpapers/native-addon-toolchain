@@ -145,9 +145,21 @@ if ((workflow.match(/\$env:WORKFLOW_REF -cne "\$prefix\$env:WORKFLOW_SHA"/gu) ??
 if (workflow.includes('${prefix}refs/heads/admission-v1')) {
   fail('The contents:write workflow must never execute from a movable branch reference.')
 }
-if ((workflow.match(/OPERATIONAL_MAX_ARCHIVE_BYTES: '4294967296'/gu) ?? []).length !== 2) {
-  fail('Both logical archives must use the reviewed 4 GiB runner budget.')
+if ((workflow.match(/ADMISSION_WORKSPACE_BUDGET_BYTES: '4294967296'/gu) ?? []).length !== 1) {
+  fail('Admission workers must inherit one reviewed 4 GiB workspace budget.')
 }
+for (const legacyBudget of [
+  'OPERATIONAL_MAX_ARCHIVE_BYTES:',
+  'OPERATIONAL_MAX_EXPANDED_BYTES:',
+  'OPERATIONAL_MAX_FILES:',
+  'OPERATIONAL_MAX_METADATA_BYTES:',
+]) {
+  if (workflow.includes(legacyBudget)) {
+    fail(`Workflow must not expose the legacy fragmented budget ${legacyBudget}`)
+  }
+}
+requireText(workflow, '$workspaceBudget / 4096L', 'workspace-derived file-accounting budget')
+requireText(workflow, '$workspaceBudget / 8L', 'workspace-derived metadata-memory budget')
 requireText(assetPublisher, '$GitHubAssetExclusiveByteLimit = 2147483648L', 'GitHub asset transport limit')
 requireText(assetPublisher, '$id -cnotmatch', 'decimal-string GitHub asset IDs')
 requireText(assetPublisher, '$remoteDigest -ceq $Digest', 'remote GitHub asset digest verification')
