@@ -10,9 +10,10 @@ const RELEASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u
 const PUBLICATION_REQUEST_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const SEMVER_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
+const CENTRAL_TOOLCHAIN_REF_PATTERN = /^refs\/tags\/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 const REQUIRED_OPTIONS = [
   'subject', 'addon-release-id', 'license-spdx', 'native-manifest-digest',
-  'materials-digest', 'materials-size', 'workflow-sha', 'output',
+  'materials-digest', 'materials-size', 'workflow-ref', 'workflow-sha', 'output',
 ]
 
 function fail(message) {
@@ -105,6 +106,12 @@ async function main() {
   const workflowSha = requiredString(options['workflow-sha'], 'workflow SHA', COMMIT_PATTERN, 40)
   const subject = await readJson(options.subject, 'admission-v1 subject')
   const centralPublication = subject.contract === 'central-admission-v1'
+  const workflowRef = requiredString(
+    options['workflow-ref'],
+    'workflow repository ref',
+    centralPublication ? CENTRAL_TOOLCHAIN_REF_PATTERN : /^refs\/heads\/admission-v1$/u,
+    255,
+  )
   exactKeys(subject, [
     'schemaVersion', 'contract', 'generatedAt', 'source', 'workflow', 'release',
     'artifact', 'build', 'evidence', ...(centralPublication ? ['publication'] : []),
@@ -240,7 +247,7 @@ async function main() {
     },
     workflow: {
       repository: 'MyWallpapers/native-addon-toolchain',
-      repositoryRef: centralPublication ? 'refs/heads/main' : 'refs/heads/admission-v1',
+      repositoryRef: workflowRef,
       workflowSha,
     },
     build: {

@@ -140,11 +140,11 @@ jobs:
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
           if ($env:PUBLICATION_MODE -ceq 'central') {
             if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cne 'refs/heads/main' -or
+                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
                 $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
                 $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
                 $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact protected main workflow commit'
+              throw 'Central publication must execute the exact immutable toolchain release commit'
             }
           } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
                     $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
@@ -368,11 +368,11 @@ jobs:
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
           if ($env:PUBLICATION_MODE -ceq 'central') {
             if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cne 'refs/heads/main' -or
+                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
                 $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
                 $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
                 $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact protected main workflow commit'
+              throw 'Central publication must execute the exact immutable toolchain release commit'
             }
           } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
                     $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
@@ -845,11 +845,11 @@ jobs:
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
           if ($env:PUBLICATION_MODE -ceq 'central') {
             if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cne 'refs/heads/main' -or
+                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
                 $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
                 $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
                 $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact protected main workflow commit'
+              throw 'Central publication must execute the exact immutable toolchain release commit'
             }
           } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
                     $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
@@ -900,7 +900,7 @@ jobs:
                 'audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
                 'finalizer-audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
                 "completion-url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-                "finalizer-base=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
+                "finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
                 "url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
               } else {
                 'audience=mywallpaper-addon-release-development' >> $env:GITHUB_OUTPUT
@@ -914,7 +914,7 @@ jobs:
                 'audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
                 'finalizer-audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
                 "completion-url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-                "finalizer-base=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
+                "finalizer-base=https://mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
                 "url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
               } else {
                 'audience=mywallpaper-addon-release-production' >> $env:GITHUB_OUTPUT
@@ -1418,6 +1418,7 @@ jobs:
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
           SOURCE_REPOSITORY: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY }}
           SUBJECT_PATH: ${{ steps.admission.outputs.subject }}
+          WORKFLOW_REPOSITORY_REF: ${{ inputs.publication_request_id != '' && github.ref || 'refs/heads/admission-v1' }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           if ($env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$') {
@@ -1453,6 +1454,7 @@ jobs:
             --native-manifest-digest $env:NATIVE_MANIFEST_DIGEST `
             --materials-digest $env:EXPECTED_MATERIALS_SHA256 `
             --materials-size $env:EXPECTED_MATERIALS_SIZE `
+            --workflow-ref $env:WORKFLOW_REPOSITORY_REF `
             --workflow-sha $env:WORKFLOW_SHA `
             --output $evidencePath
           if ($LASTEXITCODE -ne 0) { throw 'NativeBuildEvidenceV1 generation failed' }
