@@ -49,8 +49,10 @@ function assertNoExpressionsInShellBodies(workflow, label) {
 
 const wrapperPath = process.argv[2] ?? '.github/workflows/central-addon-publication.yml'
 const reusablePath = process.argv[3] ?? '.github/workflows/native-addon-build.yml'
-const wrapper = await readFile(wrapperPath, 'utf8')
-const reusable = await readFile(reusablePath, 'utf8')
+// Git may materialize workflows with CRLF on Windows runners. Contract checks
+// must validate YAML semantics, not the checkout platform's line endings.
+const wrapper = (await readFile(wrapperPath, 'utf8')).replaceAll('\r\n', '\n')
+const reusable = (await readFile(reusablePath, 'utf8')).replaceAll('\r\n', '\n')
 const scriptRoot = resolve(dirname(reusablePath), '../scripts')
 const preparer = await readFile(resolve(scriptRoot, 'prepare-immutable-release.ps1'), 'utf8')
 const finalizer = await readFile(resolve(scriptRoot, 'finalize-immutable-release.ps1'), 'utf8')
