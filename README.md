@@ -1,12 +1,13 @@
 # MyWallpaper add-on release toolchain
 
 This public repository is MyWallpaper's reviewed build boundary for add-on
-releases. Add-on repositories call the reusable workflow at an exact published
-40-character commit SHA. The protected `admission-v1` branch is only the
-discovery and promotion pointer for that contract; it is never an executable
-caller reference. The MyWallpaper backend also admits only workflow SHAs already
-present in its explicit allowlist. End users never run this toolchain and never
-compile add-on code.
+releases. MyWallpaper can dispatch the complete publication centrally, while
+existing add-on repositories can continue to call the reusable workflow at an
+exact published 40-character commit SHA. The protected `admission-v1` branch is
+only the discovery and promotion pointer for that contract; it is never an
+executable caller reference. The MyWallpaper backend also admits only workflow
+SHAs already present in its explicit allowlist. End users never run this
+toolchain and never compile add-on code.
 
 The workflow builds one release bundle from the exact Git tag. The tagged
 commit must be reachable from the repository's public, reviewed `main` default
@@ -72,10 +73,11 @@ no OIDC permission. All trusted jobs fail closed unless
 `runner.environment == github-hosted`. The only OIDC-capable publisher runs on
 GitHub-hosted Ubuntu 24.04, receives opaque files, and never checks out or
 extracts caller source. GitHub's attestation action internally uses its own
-workload identity. The first MyWallpaper OIDC token is requested only after the
+workload identity. The release-ingestion OIDC token is requested only after the
 single workflow-generated bundle proof exists and GitHub has locked the
-release; the second is requested only after candidate ingestion and evidence
-construction. GitHub additionally generates its own release attestation when
+release; the native finalizer token is requested only after candidate ingestion
+and evidence construction. Central request claim/status tokens carry no bundle
+publication authority. GitHub additionally generates its own release attestation when
 the draft becomes immutable.
 
 This is a reproducible rebuild boundary, not a hermetic or network-denied
@@ -94,6 +96,80 @@ to bind the declared repository identity to the rebuilt source. Hooks remain
 disabled, Git credentials remain unavailable, redirects remain refused during
 fetch, and no caller-provided remote URL is retained. Trusted toolchain
 checkouts in privileged jobs still remove their own remote after verification.
+
+## MyWallpaper-managed publication
+
+The preferred low-friction path is
+`.github/workflows/central-addon-publication.yml`. An author only publishes a
+new immutable `vSemVer` tag from the public repository's reviewed default
+branch and requests publication in MyWallpaper. The author does not copy a
+workflow, create a GitHub App installation, grant source-repository write
+access, manage a signing key, or keep a MyWallpaper secret.
+
+The backend freezes the request UUID, an immutable attempt UUID, numeric source
+repository ID, `owner/name`, exact tag ref, exact commit SHA, canonical manifest
+version and channel before dispatch. A credential-free GitHub-hosted
+authorization job claims that exact request and attempt through GitHub OIDC
+before any add-on code runs. The backend accepts the claim only from the
+protected toolchain `main` workflow SHA
+in its explicit allowlist and binds the request to the GitHub run, attempt and
+OIDC identity. Invalid or unclaimed dispatches cannot update request state.
+
+The central path then reuses the same two fresh Windows rebuilds, fresh Windows
+verifier, byte-identity checks, deterministic archive, SBOM/provenance,
+GitHub/Sigstore attestations, immutable release lock, ingestion and native
+evidence finalizer as the caller-managed path. Build jobs retain only
+`contents: read`; they receive no OIDC permission and no secret. The publisher
+never executes or extracts add-on source.
+
+Central artifacts use the toolchain repository only as an immutable transport:
+the release tag is `publication-<attempt UUID>`, targets the exact allowlisted
+toolchain workflow commit, is never selected as the repository's latest
+release, and binds the frozen source repository, source tag, source commit,
+version, request ID and attempt ID in its evidence. The source tag is resolved
+and checked against the reviewed default branch before builds and again before
+publication.
+MyWallpaper never writes to or publishes a release in the author's repository.
+
+A platform failure never consumes the author's source tag. Every retry is a new
+server-created attempt, a new GitHub run with `run_attempt == 1`, and a new
+`publication-<attempt UUID>` transport. Generic workflow failures and
+cancellations are reported as `retryable`; only explicitly classified source or
+authority failures may become terminal. Claim retries are bounded and apply
+only to the short HTTP 425 dispatcher-registration race, HTTP 429 throttling,
+HTTP 5xx responses and network timeouts. A bounded `Retry-After` is honored when
+present; redirects and unregistered Actions runs remain rejected.
+
+If authorization itself cannot finish, the wrapper still sends an OIDC-signed,
+bounded failure callback with `errorCode: publication-claim-failed`. The backend
+may move the request only when the JWT identifies the exact request, attempt,
+repository, wrapper, run ID and `run_attempt == 1` that were prebound before
+dispatch; a successful claim is not required and no other run can mutate the
+request. HTTP 425, 429, 5xx and network timeouts are retried with the same
+bounded policy. A durable backend watcher remains responsible for reconciling
+the attempt when GitHub cannot execute even this callback.
+
+Completion idempotency is phase-specific so a later publisher failure cannot
+collide with the earlier verified transition: successful double rebuilds use
+`addon-publication:<request>:<attempt>:complete:verified`, while failure
+callbacks use `addon-publication:<request>:<attempt>:complete:failed`.
+
+GitHub release immutability must therefore be enabled on
+`MyWallpapers/native-addon-toolchain`. Production rollout is deliberately
+two-phase: merge the reviewed workflow, record its signed squash SHA, then add
+that exact wrapper/reusable workflow SHA and OIDC claims to the backend policy.
+Until the policy deployment succeeds, central requests fail closed.
+
+For central publisher callbacks, the backend validates the signed JWT against
+one exact identity shape: `workflow_ref` is
+`MyWallpapers/native-addon-toolchain/.github/workflows/central-addon-publication.yml@refs/heads/main`,
+`workflow_sha` is the allowlisted toolchain commit, `job_workflow_ref` is
+`MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@refs/heads/main`,
+and `job_workflow_sha` is that same allowlisted commit. For the legacy external
+caller path, `job_workflow_ref` instead ends in `@<full 40-character SHA>` and
+`job_workflow_sha` equals that SHA. The backend verifies GitHub's JWT signature
+and these claims; the workflow intentionally does not duplicate an
+unauthoritative local JWT decoder.
 
 ## Caller
 
@@ -235,7 +311,8 @@ asynchronously, so the workflow performs a short bounded re-read with backoff;
 an absent/mismatched value still fails closed. The publisher changes only
 `draft` to `false` and admits nothing until a fresh release read says
 `immutable: true`. A published mutable release is never treated as reusable or
-admissible. No MyWallpaper OIDC token exists before this lock is proven.
+admissible. No MyWallpaper release-ingestion token exists before this lock is
+proven.
 
 The first POST goes to the dedicated, non-OpenAPI
 `/api/internal/addon-release-ingestion` endpoint as `application/json`:

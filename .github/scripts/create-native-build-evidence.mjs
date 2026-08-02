@@ -8,6 +8,8 @@ const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u
 const RELEASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u
+const PUBLICATION_REQUEST_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const SEMVER_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 const REQUIRED_OPTIONS = [
   'subject', 'addon-release-id', 'license-spdx', 'native-manifest-digest',
   'materials-digest', 'materials-size', 'workflow-sha', 'output',
@@ -102,10 +104,26 @@ async function main() {
   }
   const workflowSha = requiredString(options['workflow-sha'], 'workflow SHA', COMMIT_PATTERN, 40)
   const subject = await readJson(options.subject, 'admission-v1 subject')
+  const centralPublication = subject.contract === 'central-admission-v1'
   exactKeys(subject, [
     'schemaVersion', 'contract', 'generatedAt', 'source', 'workflow', 'release',
-    'artifact', 'build', 'evidence',
+    'artifact', 'build', 'evidence', ...(centralPublication ? ['publication'] : []),
   ], 'admission-v1 subject')
+  if (centralPublication) {
+    exactKeys(subject.publication, ['requestId', 'attemptId'], 'central publication identity')
+    requiredString(
+      subject.publication.requestId,
+      'publication request ID',
+      PUBLICATION_REQUEST_PATTERN,
+      36,
+    )
+    requiredString(
+      subject.publication.attemptId,
+      'publication attempt ID',
+      PUBLICATION_REQUEST_PATTERN,
+      36,
+    )
+  }
   exactKeys(subject.source, [
     'repositoryId', 'repository', 'commitSha', 'ref', 'sourceDigest', 'lockfilesDigest',
   ], 'admission-v1 source')
@@ -124,7 +142,8 @@ async function main() {
   exactKeys(subject.evidence.authorInventory, ['fileCount', 'totalBytes', 'digest'], 'author inventory')
   const workflowPrefix = 'MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@'
   const acceptedWorkflowRef = `${workflowPrefix}${workflowSha}`
-  if (subject.schemaVersion !== 1 || subject.contract !== 'admission-v1'
+  if (subject.schemaVersion !== 1
+    || !['admission-v1', 'central-admission-v1'].includes(subject.contract)
     || subject.workflow.repository !== 'MyWallpapers/native-addon-toolchain'
     || subject.workflow.path !== '.github/workflows/native-addon-build.yml'
     || subject.workflow.requestedRef !== acceptedWorkflowRef
@@ -166,6 +185,17 @@ async function main() {
   requiredString(subject.source.repository, 'repository', REPOSITORY_PATTERN, 140)
   requiredString(subject.source.commitSha, 'commit SHA', COMMIT_PATTERN, 40)
   requiredString(subject.source.ref, 'source tag ref', /^refs\/tags\/[^\0\r\n]{1,240}$/u, 250)
+  if (centralPublication) {
+    const sourceVersion = requiredString(
+      subject.release.version,
+      'source version',
+      SEMVER_PATTERN,
+      128,
+    )
+    if (subject.source.ref !== `refs/tags/v${sourceVersion}`) {
+      fail('Central publication source tag and version differ.')
+    }
+  }
   for (const value of [
     subject.source.sourceDigest,
     subject.source.lockfilesDigest,
@@ -187,7 +217,17 @@ async function main() {
 
   const evidence = {
     schemaVersion: 1,
-    checklistVersion: 'native-build-integrity-v1',
+    checklistVersion: centralPublication
+      ? 'central-native-build-integrity-v1'
+      : 'native-build-integrity-v1',
+    ...(centralPublication ? {
+      publication: {
+        requestId: subject.publication.requestId,
+        attemptId: subject.publication.attemptId,
+        sourceRef: subject.source.ref,
+        sourceVersion: subject.release.version,
+      },
+    } : {}),
     release: {
       addonReleaseId: releaseId,
       distributionDigest: subject.release.distributionDigest,
@@ -200,7 +240,7 @@ async function main() {
     },
     workflow: {
       repository: 'MyWallpapers/native-addon-toolchain',
-      repositoryRef: 'refs/heads/admission-v1',
+      repositoryRef: centralPublication ? 'refs/heads/main' : 'refs/heads/admission-v1',
       workflowSha,
     },
     build: {
