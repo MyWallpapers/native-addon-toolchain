@@ -13,6 +13,27 @@ if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
 
 $env:ACTIONS_ID_TOKEN_REQUEST_URL = 'https://token.actions.invalid/oidc?job=publisher'
 $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN = 'runner-token'
+$env:PUBLICATION_REQUEST_ID = '00000000-0000-4000-8000-000000000001'
+$env:PUBLICATION_ATTEMPT_ID = '00000000-0000-4000-8000-000000000002'
+$env:ADDON_RELEASE_ID = '00000000-0000-4000-8000-000000000003'
+$centralIdempotencyKeys = @(
+  "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):claim",
+  "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:failed",
+  "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:verified",
+  "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion",
+  "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)"
+)
+$expectedCentralIdempotencyKeys = @(
+  'addon-publication:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:claim',
+  'addon-publication:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:complete:failed',
+  'addon-publication:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:complete:verified',
+  'addon-publication:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:ingestion',
+  'addon-publication:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:evidence:00000000-0000-4000-8000-000000000003'
+)
+if (($centralIdempotencyKeys -join "`n") -cne
+    ($expectedCentralIdempotencyKeys -join "`n")) {
+  throw 'Central publication idempotency keys lost one or more delimited identities'
+}
 $script:sleeps = @()
 function Start-Sleep {
   param([int]$Seconds)
