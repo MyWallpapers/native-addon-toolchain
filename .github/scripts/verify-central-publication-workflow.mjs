@@ -215,6 +215,22 @@ for (const [value, label] of [[build, 'build'], [verifier, 'verifier']]) {
 }
 requireText(build, 'replica: [1, 2]', 'two independent builds')
 requireText(verifier, 'function Assert-ByteIdentical', 'fresh byte-identity verification')
+requireText(
+  verifier,
+  "$sourceTag = $env:CALLER_REF.Substring('refs/tags/'.Length)",
+  'frozen source-tag extraction',
+)
+requireText(
+  verifier,
+  '$sourceTag -cne "v$env:EXPECTED_SOURCE_VERSION"',
+  'source-tag and manifest-version binding',
+)
+requireText(verifier, "$env:GITHUB_REF_TYPE = 'tag'", 'canonical CLI tag context')
+requireText(verifier, '$env:GITHUB_REF_NAME = $sourceTag', 'canonical CLI source-tag context')
+if (verifier.indexOf('$env:GITHUB_REF_NAME = $sourceTag')
+    >= verifier.indexOf('node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check')) {
+  fail('The canonical CLI must receive the frozen source tag before validation.')
+}
 requireCount(reusable, "github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''", 3, 'central dispatch job guards')
 requireCount(reusable, "$env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v", 3, 'immutable toolchain release runtime guards')
 requireCount(reusable, '$env:DISPATCH_SHA -cne $env:WORKFLOW_SHA', 3, 'exact toolchain SHA guards')

@@ -237,6 +237,22 @@ const build = section(workflow, '  build-untrusted:', '  verify-package:')
 const verifier = section(workflow, '  verify-package:', '  attest-publish:')
 const publisher = section(workflow, '  attest-publish:')
 requireText(
+  verifier,
+  "$sourceTag = $env:CALLER_REF.Substring('refs/tags/'.Length)",
+  'frozen source-tag extraction',
+)
+requireText(
+  verifier,
+  '$sourceTag -cne "v$env:EXPECTED_SOURCE_VERSION"',
+  'central source-tag and manifest-version binding',
+)
+requireText(verifier, "$env:GITHUB_REF_TYPE = 'tag'", 'canonical CLI tag context')
+requireText(verifier, '$env:GITHUB_REF_NAME = $sourceTag', 'canonical CLI source-tag context')
+if (verifier.indexOf('$env:GITHUB_REF_NAME = $sourceTag')
+    >= verifier.indexOf('node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check')) {
+  fail('Canonical validation must consume the immutable source tag, not the workflow authority tag.')
+}
+requireText(
   build,
   'Materialize isolated immutable caller copies without credentials',
   'separate untrusted build copies',
