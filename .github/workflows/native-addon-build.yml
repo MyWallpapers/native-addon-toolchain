@@ -935,15 +935,6 @@ jobs:
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
         run: |
-          $audience = [Uri]::EscapeDataString($env:AUTHORIZATION_AUDIENCE)
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $tokenResponse = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$audience" `
-            -MaximumRedirection 0
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-            throw 'GitHub did not issue the verification completion OIDC token'
-          }
           $request = [ordered]@{
             schemaVersion = 1
             publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
@@ -951,18 +942,18 @@ jobs:
             failureClass = $null
             errorCode = $null
           }
-          $response = Invoke-RestMethod `
-            -Method Post `
+          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
+          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+            ($request | ConvertTo-Json -Depth 4 -Compress)
+          )
+          $response = Invoke-MyWallpaperIdempotentJsonPost `
             -Uri $env:COMPLETION_URL `
-            -MaximumRedirection 0 `
             -Headers @{
-              Authorization = "Bearer $($tokenResponse.value)"
               'Idempotency-Key' = "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:complete:verified"
             } `
-            -ContentType 'application/json' `
-            -Body ([Text.UTF8Encoding]::new($false).GetBytes(
-              ($request | ConvertTo-Json -Depth 4 -Compress)
-            ))
+            -Body $requestBytes `
+            -Operation 'MyWallpaper verification completion' `
+            -Audience $env:AUTHORIZATION_AUDIENCE
           $responseKeys = @($response.PSObject.Properties.Name | Sort-Object)
           $expectedResponseKeys = @('publicationRequestId', 'state') | Sort-Object
           if (($responseKeys -join "`n") -cne ($expectedResponseKeys -join "`n") -or
@@ -1314,17 +1305,6 @@ jobs:
           if ($env:IMMUTABLE_RELEASE -cne 'true') {
             throw 'MyWallpaper OIDC is forbidden until GitHub confirms an immutable release'
           }
-          $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
-          if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
-            throw 'GitHub OIDC audience query construction failed'
-          }
-          $tokenResponse = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri $tokenUri `
-            -MaximumRedirection 0
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) { throw 'GitHub OIDC token was not returned' }
           $repositoryId = $env:SOURCE_REPOSITORY_ID
           $commitSha = $env:SOURCE_COMMIT_SHA
           if ([string]::IsNullOrWhiteSpace($repositoryId) -or $repositoryId -cnotmatch '\A[0-9]+\z') {
@@ -1367,18 +1347,46 @@ jobs:
           $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
             ($request | ConvertTo-Json -Depth 8 -Compress)
           )
+          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
           try {
-            $response = Invoke-RestMethod `
-              -Method Post `
-              -Uri $env:PUBLICATION_URL `
-              -MaximumRedirection 0 `
-              -Headers @{
-                Authorization = "Bearer $($tokenResponse.value)"
-                'Idempotency-Key' = $idempotencyKey
-                'X-Request-ID' = $idempotencyKey
-              } `
-              -ContentType 'application/json' `
-              -Body $requestBytes
+            $publicationHeaders = @{
+              'Idempotency-Key' = $idempotencyKey
+              'X-Request-ID' = $idempotencyKey
+            }
+            $response = if ($env:PUBLICATION_MODE -ceq 'central') {
+              Invoke-MyWallpaperIdempotentJsonPost `
+                -Uri $env:PUBLICATION_URL `
+                -Headers $publicationHeaders `
+                -Body $requestBytes `
+                -Operation 'MyWallpaper immutable release publication' `
+                -Audience $env:PUBLICATION_AUDIENCE `
+                -PendingStates @('queued', 'processing') `
+                -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
+                -RetryHorizonSec 1500 `
+                -MaxAttempts 320
+            } else {
+              $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
+              $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
+              $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
+              if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
+                throw 'GitHub OIDC audience query construction failed'
+              }
+              $tokenResponse = Invoke-RestMethod `
+                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+                -Uri $tokenUri `
+                -MaximumRedirection 0
+              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+                throw 'GitHub OIDC token was not returned'
+              }
+              $publicationHeaders['Authorization'] = "Bearer $($tokenResponse.value)"
+              Invoke-RestMethod `
+                -Method Post `
+                -Uri $env:PUBLICATION_URL `
+                -MaximumRedirection 0 `
+                -Headers $publicationHeaders `
+                -ContentType 'application/json' `
+                -Body $requestBytes
+            }
           } catch {
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
             throw "MyWallpaper publication rejected the release: $detail"
@@ -1556,32 +1564,47 @@ jobs:
           }
           $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestText)
 
-          $audience = [Uri]::EscapeDataString($env:FINALIZER_AUDIENCE)
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
-          if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
-            throw 'GitHub finalizer OIDC audience query construction failed'
-          }
-          $tokenResponse = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri $tokenUri `
-            -MaximumRedirection 0
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-            throw 'GitHub finalizer OIDC token was not returned'
-          }
-          $finalizerHeaders = @{ Authorization = "Bearer $($tokenResponse.value)" }
+          $finalizerHeaders = @{}
           if ($env:PUBLICATION_MODE -ceq 'central') {
             $finalizerHeaders['Idempotency-Key'] =
               "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:evidence:$env:ADDON_RELEASE_ID"
           }
+          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
           try {
-            $result = Invoke-RestMethod `
-              -Method Post `
-              -Uri $uri `
-              -MaximumRedirection 0 `
-              -Headers $finalizerHeaders `
-              -ContentType 'application/json' `
-              -Body $requestBytes
+            $result = if ($env:PUBLICATION_MODE -ceq 'central') {
+              Invoke-MyWallpaperIdempotentJsonPost `
+                -Uri $uri `
+                -Headers $finalizerHeaders `
+                -Body $requestBytes `
+                -Operation 'MyWallpaper native evidence finalization' `
+                -Audience $env:FINALIZER_AUDIENCE `
+                -PendingStates @('queued', 'processing') `
+                -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
+                -RetryHorizonSec 1500 `
+                -MaxAttempts 320
+            } else {
+              $audience = [Uri]::EscapeDataString($env:FINALIZER_AUDIENCE)
+              $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
+              $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
+              if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
+                throw 'GitHub finalizer OIDC audience query construction failed'
+              }
+              $tokenResponse = Invoke-RestMethod `
+                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+                -Uri $tokenUri `
+                -MaximumRedirection 0
+              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+                throw 'GitHub finalizer OIDC token was not returned'
+              }
+              $finalizerHeaders['Authorization'] = "Bearer $($tokenResponse.value)"
+              Invoke-RestMethod `
+                -Method Post `
+                -Uri $uri `
+                -MaximumRedirection 0 `
+                -Headers $finalizerHeaders `
+                -ContentType 'application/json' `
+                -Body $requestBytes
+            }
           } catch {
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
               $_.Exception.Message

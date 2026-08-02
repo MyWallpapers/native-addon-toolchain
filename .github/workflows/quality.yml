@@ -62,6 +62,8 @@ jobs:
             '.github/scripts/finalize-immutable-release.ps1',
             '.github/scripts/github-api-contract.ps1',
             '.github/scripts/github-api-contract.test.ps1',
+            '.github/scripts/invoke-mywallpaper-idempotent-json.ps1',
+            '.github/scripts/invoke-mywallpaper-idempotent-json.test.ps1',
             '.github/scripts/materialize-addon-build.ps1',
             '.github/scripts/materialize-immutable-repository.ps1',
             '.github/scripts/materialize-immutable-repository.test.ps1',
@@ -105,6 +107,7 @@ jobs:
             -CommitSha $env:IMMUTABLE_CHECKOUT_TEST_SHA
           & .github/scripts/package-admission-materials.test.ps1
           & .github/scripts/github-api-contract.test.ps1
+          & .github/scripts/invoke-mywallpaper-idempotent-json.test.ps1
           & .github/scripts/split-release-artifact.test.ps1
           & .github/scripts/admission-evidence.integration.test.ps1
 
