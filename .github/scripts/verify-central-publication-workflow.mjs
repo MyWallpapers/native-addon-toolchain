@@ -57,6 +57,10 @@ const scriptRoot = resolve(dirname(reusablePath), '../scripts')
 const preparer = await readFile(resolve(scriptRoot, 'prepare-immutable-release.ps1'), 'utf8')
 const finalizer = await readFile(resolve(scriptRoot, 'finalize-immutable-release.ps1'), 'utf8')
 const nativeEvidence = await readFile(resolve(scriptRoot, 'create-native-build-evidence.mjs'), 'utf8')
+const idempotentCallback = await readFile(
+  resolve(scriptRoot, 'invoke-mywallpaper-idempotent-json.ps1'),
+  'utf8',
+)
 
 requireText(wrapper, 'name: MyWallpaper central add-on publication', 'the named central entrypoint')
 requireText(wrapper, '  workflow_dispatch:\n', 'the explicit server-dispatched trigger')
@@ -125,6 +129,10 @@ requireText(authorize, '$retryable -and $claimAttempt -lt 5', 'bounded transient
 requireText(authorize, '$httpResponse.Headers.RetryAfter', 'server-directed retry delay support')
 requireText(authorize, '[Math]::Min(', 'bounded Retry-After delay')
 requireText(authorize, 'Start-Sleep -Seconds $delaySeconds', 'bounded claim backoff')
+const claimLoop = section(authorize, 'for ($claimAttempt = 0;', 'if ($null -eq $response)')
+requireText(claimLoop, '$tokenResponse = Invoke-RestMethod', 'fresh claim OIDC token per attempt')
+requireText(claimLoop, '$status -eq 408 -or', 'claim request-timeout retry')
+requireText(claimLoop, '$status -eq 0 -and $transportFailure', 'claim transport-only retry')
 
 requireText(release, 'needs: authorize', 'authorization before untrusted builds')
 requireText(release, 'uses: ./.github/workflows/native-addon-build.yml', 'the local reviewed reusable workflow')
@@ -164,6 +172,14 @@ requireText(complete, '$httpResponse.Headers.RetryAfter', 'failure callback Retr
 requireText(complete, '-TimeoutSec 20', 'a bounded failure callback timeout')
 requireText(complete, "$response.state -cne 'failed'", 'the strict failed response transition')
 requireText(complete, '$response.PSObject.Properties.Name', 'the exact failure response shape check')
+const completionLoop = section(
+  complete,
+  'for ($completionAttempt = 0;',
+  'if ($null -eq $response)',
+)
+requireText(completionLoop, '$tokenResponse = Invoke-RestMethod', 'fresh completion OIDC token per attempt')
+requireText(completionLoop, '$status -eq 408 -or', 'completion request-timeout retry')
+requireText(completionLoop, '$status -eq 0 -and $transportFailure', 'completion transport-only retry')
 
 for (const audience of [
   'mywallpaper-addon-publication-development',
@@ -253,10 +269,70 @@ requireText(publisher, '-PublicationRequestId $env:PUBLICATION_REQUEST_ID', 'req
 requireText(publisher, '-PublicationAttemptId $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound immutable release')
 requireText(publisher, 'addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:ingestion', 'attempt-bound ingestion idempotency')
 requireText(publisher, 'addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:evidence:$env:ADDON_RELEASE_ID', 'attempt-bound evidence idempotency')
+requireCount(
+  publisher,
+  '. toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1',
+  3,
+  'shared idempotent callback imports',
+)
+requireCount(
+  publisher,
+  'Invoke-MyWallpaperIdempotentJsonPost',
+  3,
+  'bounded idempotent callback invocations',
+)
 requireText(publisher, 'publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound central payloads')
 requireText(publisher, 'create-native-build-evidence.mjs', 'fresh NativeBuildEvidence transformation')
 requireText(publisher, 'actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6', 'pinned GitHub/Sigstore attestation')
-requireCount(publisher, '-MaximumRedirection 0', 7, 'redirect refusals in OIDC and MyWallpaper publisher requests')
+requireCount(publisher, '-MaximumRedirection 0', 5, 'direct redirect refusals in legacy publisher and GitHub requests')
+for (const [fragment, label] of [
+  ['[ValidateRange(1, 512)][int]$MaxAttempts = 6', 'bounded callback attempt budget'],
+  ['-MaximumRedirection 0', 'callback redirect refusal'],
+  ['[ValidateRange(1, 120)][int]$TimeoutSec = 20', 'short per-request callback timeout'],
+  ['[ValidateRange(1, 3600)][int]$RetryHorizonSec = 120', 'bounded async polling horizon'],
+  ['-TimeoutSec $TimeoutSec', 'callback request timeout'],
+  ['-Method Get', 'fresh GitHub OIDC token request'],
+  ["$Headers.ContainsKey('Authorization')", 'caller bearer-token rejection'],
+  ["$requestHeaders['Authorization']", 'per-request fresh OIDC token injection'],
+  ['$status -ne 202', 'durable pending-operation polling'],
+  ['$PendingStates', 'strict pending-state allowlist'],
+  ['$PendingPublicationRequestId', 'pending publication-request correlation'],
+  ["@('publicationRequestId', 'state')", 'exact pending response shape'],
+  ['$status -eq 408', 'request-timeout transient retry'],
+  ['$status -eq 425', 'early-data transient retry'],
+  ['$status -eq 429', 'rate-limit transient retry'],
+  ['$status -ge 500 -and $status -le 599', 'server transient retry'],
+  ['$status -eq 0 -and $transportFailure', 'transport-only transient retry'],
+  ["$Headers['Idempotency-Key']", 'stable idempotency-key requirement'],
+  ['function Get-MyWallpaperRetryAfterSeconds', 'one bounded Retry-After parser'],
+  ["$Headers.PSObject.Properties['RetryAfter']", 'typed .NET Retry-After support'],
+  ['$Headers.GetEnumerator()', 'dictionary Retry-After support'],
+  ['[Math]::Min(', 'bounded Retry-After handling'],
+]) requireText(idempotentCallback, fragment, label)
+requireCount(
+  publisher,
+  '-RetryHorizonSec 1500',
+  2,
+  'bounded durable ingestion and native-evidence polling horizons',
+)
+requireCount(
+  publisher,
+  '-PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID',
+  2,
+  'pending callbacks correlated to the frozen publication request',
+)
+requireCount(
+  publisher,
+  "-PendingStates @('queued', 'processing')",
+  2,
+  'strict queued and processing response polling',
+)
+requireCount(
+  publisher,
+  '-MaxAttempts 320',
+  2,
+  'bounded durable polling attempt budgets',
+)
 
 for (const script of [preparer, finalizer]) {
   requireText(script, "$Repository -cne 'MyWallpapers/native-addon-toolchain'", 'toolchain-only central transport')

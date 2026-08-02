@@ -120,13 +120,6 @@ jobs:
           }
           $audience = [Uri]::EscapeDataString($env:AUTHORIZATION_AUDIENCE)
           $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $tokenResponse = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$audience" `
-            -MaximumRedirection 0
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-            throw 'GitHub did not issue the central publication OIDC token'
-          }
           $request = [ordered]@{
             schemaVersion = 1
             publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
@@ -143,6 +136,14 @@ jobs:
           )
           for ($claimAttempt = 0; $claimAttempt -lt 6; $claimAttempt++) {
             try {
+              $tokenResponse = Invoke-RestMethod `
+                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+                -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$audience" `
+                -MaximumRedirection 0 `
+                -TimeoutSec 20
+              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+                throw 'GitHub did not issue the central publication OIDC token'
+              }
               $response = Invoke-RestMethod `
                 -Method Post `
                 -Uri $env:AUTHORIZATION_URL `
@@ -161,20 +162,25 @@ jobs:
               if ($null -ne $httpResponse -and $null -ne $httpResponse.StatusCode) {
                 $status = [int]$httpResponse.StatusCode
               }
-              $timeout = $false
+              $transportFailure = $false
               $exception = $_.Exception
               while ($null -ne $exception) {
                 if ($exception -is [TimeoutException] -or
-                    $exception -is [System.Threading.Tasks.TaskCanceledException]) {
-                  $timeout = $true
+                    $exception -is [System.Threading.Tasks.TaskCanceledException] -or
+                    $exception.GetType().FullName -ceq 'System.Net.Http.HttpRequestException' -or
+                    $exception -is [System.Net.WebException] -or
+                    $exception -is [System.IO.IOException] -or
+                    $exception -is [System.Net.Sockets.SocketException]) {
+                  $transportFailure = $true
                   break
                 }
                 $exception = $exception.InnerException
               }
-              $retryable = $status -eq 425 -or
+              $retryable = $status -eq 408 -or
+                $status -eq 425 -or
                 $status -eq 429 -or
                 ($status -ge 500 -and $status -le 599) -or
-                $timeout
+                ($status -eq 0 -and $transportFailure)
               if ($retryable -and $claimAttempt -lt 5) {
                 $delaySeconds = [int][Math]::Pow(2, $claimAttempt)
                 if ($null -ne $httpResponse -and $null -ne $httpResponse.Headers.RetryAfter) {
@@ -271,13 +277,6 @@ jobs:
           $audience = "mywallpaper-addon-publication-$env:PUBLICATION_CHANNEL"
           $escapedAudience = [Uri]::EscapeDataString($audience)
           $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $tokenResponse = Invoke-RestMethod `
-            -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-            -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$escapedAudience" `
-            -MaximumRedirection 0
-          if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-            throw 'GitHub did not issue the completion OIDC token'
-          }
           $errorCode = if ($env:AUTHORIZE_RESULT -cne 'success') {
             'publication-claim-failed'
           } elseif ($env:RELEASE_RESULT -ceq 'cancelled') {
@@ -296,6 +295,14 @@ jobs:
           )
           for ($completionAttempt = 0; $completionAttempt -lt 6; $completionAttempt++) {
             try {
+              $tokenResponse = Invoke-RestMethod `
+                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
+                -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$escapedAudience" `
+                -MaximumRedirection 0 `
+                -TimeoutSec 20
+              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
+                throw 'GitHub did not issue the completion OIDC token'
+              }
               $response = Invoke-RestMethod `
                 -Method Post `
                 -Uri "$origin/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" `
@@ -314,20 +321,25 @@ jobs:
               if ($null -ne $httpResponse -and $null -ne $httpResponse.StatusCode) {
                 $status = [int]$httpResponse.StatusCode
               }
-              $timeout = $false
+              $transportFailure = $false
               $exception = $_.Exception
               while ($null -ne $exception) {
                 if ($exception -is [TimeoutException] -or
-                    $exception -is [System.Threading.Tasks.TaskCanceledException]) {
-                  $timeout = $true
+                    $exception -is [System.Threading.Tasks.TaskCanceledException] -or
+                    $exception.GetType().FullName -ceq 'System.Net.Http.HttpRequestException' -or
+                    $exception -is [System.Net.WebException] -or
+                    $exception -is [System.IO.IOException] -or
+                    $exception -is [System.Net.Sockets.SocketException]) {
+                  $transportFailure = $true
                   break
                 }
                 $exception = $exception.InnerException
               }
-              $retryable = $status -eq 425 -or
+              $retryable = $status -eq 408 -or
+                $status -eq 425 -or
                 $status -eq 429 -or
                 ($status -ge 500 -and $status -le 599) -or
-                $timeout
+                ($status -eq 0 -and $transportFailure)
               if ($retryable -and $completionAttempt -lt 5) {
                 $delaySeconds = [int][Math]::Pow(2, $completionAttempt)
                 if ($null -ne $httpResponse -and $null -ne $httpResponse.Headers.RetryAfter) {
