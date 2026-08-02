@@ -949,7 +949,7 @@ jobs:
           $response = Invoke-MyWallpaperIdempotentJsonPost `
             -Uri $env:COMPLETION_URL `
             -Headers @{
-              'Idempotency-Key' = "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:complete:verified"
+              'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:verified"
             } `
             -Body $requestBytes `
             -Operation 'MyWallpaper verification completion' `
@@ -1314,7 +1314,7 @@ jobs:
             throw 'GITHUB_SHA must be a 40-character hexadecimal commit SHA'
           }
           $idempotencyKey = if ($env:PUBLICATION_MODE -ceq 'central') {
-            "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:ingestion"
+            "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion"
           } else {
             "addon-release:$($repositoryId):$($commitSha)"
           }
@@ -1567,7 +1567,7 @@ jobs:
           $finalizerHeaders = @{}
           if ($env:PUBLICATION_MODE -ceq 'central') {
             $finalizerHeaders['Idempotency-Key'] =
-              "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:evidence:$env:ADDON_RELEASE_ID"
+              "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)"
           }
           . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
           try {

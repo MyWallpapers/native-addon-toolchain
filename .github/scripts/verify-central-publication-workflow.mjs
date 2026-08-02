@@ -117,7 +117,7 @@ requireText(authorize, 'sourceCommitSha = $env:SOURCE_COMMIT_SHA', 'source commi
 requireText(authorize, 'sourceVersion = $env:SOURCE_VERSION', 'source version in the claim')
 requireText(authorize, 'channel = $env:PUBLICATION_CHANNEL', 'publication channel in the claim')
 requireText(authorize, '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/claim', 'the fixed claim endpoint')
-requireText(authorize, "'Idempotency-Key' = \"addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:claim\"", 'attempt-bound claim idempotency')
+requireText(authorize, "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):claim\"", 'attempt-bound claim idempotency')
 requireText(authorize, "$response.state -cne 'building'", 'the strict building response transition')
 requireText(authorize, '$response.PSObject.Properties.Name', 'the exact claim response shape check')
 requireText(authorize, '-TimeoutSec 20', 'a bounded claim request timeout')
@@ -164,7 +164,7 @@ requireText(complete, 'errorCode = $errorCode', 'the bounded failure code')
 requireText(complete, '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete', 'the fixed completion endpoint')
 requireText(
   complete,
-  "'Idempotency-Key' = \"addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:complete:failed\"",
+  "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:failed\"",
   'failure-outcome-specific completion idempotency',
 )
 requireText(complete, '$retryable -and $completionAttempt -lt 5', 'bounded failure callback retries')
@@ -259,7 +259,7 @@ requireText(publisher, "outcome = 'succeeded'", 'successful double-rebuild compl
 requireText(publisher, 'failureClass = $null', 'null success failure class')
 requireText(
   publisher,
-  "'Idempotency-Key' = \"addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:complete:verified\"",
+  "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:verified\"",
   'verified-outcome-specific completion idempotency',
 )
 requireText(publisher, "$response.state -cne 'verifying'", 'strict verifying response transition')
@@ -267,8 +267,14 @@ requireText(publisher, '$response.PSObject.Properties.Name', 'exact verifying re
 requireText(publisher, '"publication-$env:PUBLICATION_ATTEMPT_ID"', 'attempt-namespaced transport tag')
 requireText(publisher, '-PublicationRequestId $env:PUBLICATION_REQUEST_ID', 'request-bound immutable release')
 requireText(publisher, '-PublicationAttemptId $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound immutable release')
-requireText(publisher, 'addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:ingestion', 'attempt-bound ingestion idempotency')
-requireText(publisher, 'addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:evidence:$env:ADDON_RELEASE_ID', 'attempt-bound evidence idempotency')
+requireText(publisher, 'addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion', 'attempt-bound ingestion idempotency')
+requireText(publisher, 'addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)', 'attempt-bound evidence idempotency')
+
+for (const workflow of [wrapper, reusable]) {
+  if (/\$env:[A-Za-z_][A-Za-z0-9_]*:/u.test(workflow)) {
+    fail('PowerShell variables immediately followed by a colon must use an explicit subexpression.')
+  }
+}
 requireCount(
   publisher,
   '. toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1',

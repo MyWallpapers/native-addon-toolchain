@@ -151,7 +151,7 @@ jobs:
                 -TimeoutSec 20 `
                 -Headers @{
                   Authorization = "Bearer $($tokenResponse.value)"
-                  'Idempotency-Key' = "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:claim"
+                  'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):claim"
                 } `
                 -ContentType 'application/json' `
                 -Body $requestBytes
@@ -310,7 +310,7 @@ jobs:
                 -TimeoutSec 20 `
                 -Headers @{
                   Authorization = "Bearer $($tokenResponse.value)"
-                  'Idempotency-Key' = "addon-publication:$env:PUBLICATION_REQUEST_ID:$env:PUBLICATION_ATTEMPT_ID:complete:failed"
+                  'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:failed"
                 } `
                 -ContentType 'application/json' `
                 -Body $requestBytes
