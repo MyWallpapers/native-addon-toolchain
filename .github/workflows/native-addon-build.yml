@@ -484,6 +484,17 @@ jobs:
           }
           $fileBudget = [Math]::Max(1L, [long]($workspaceBudget / 4096L))
           if ($env:CALLER_REF -cnotmatch '^refs/tags/v') { throw 'Add-on releases require a v-prefixed Git tag' }
+          $sourceTag = $env:CALLER_REF.Substring('refs/tags/'.Length)
+          if ($env:PUBLICATION_MODE -ceq 'central' -and
+              $sourceTag -cne "v$env:EXPECTED_SOURCE_VERSION") {
+            throw 'Frozen source ref differs from the expected manifest version'
+          }
+          # The canonical CLI validates Git provenance through GitHub's tag
+          # environment. In central mode the ambient ref belongs to the
+          # toolchain authority, so bind that validation to the already-frozen
+          # source tag instead of leaking central-publication-v* into it.
+          $env:GITHUB_REF_TYPE = 'tag'
+          $env:GITHUB_REF_NAME = $sourceTag
           $repositoryParts = $env:CALLER_REPOSITORY.Split('/')
           if ($repositoryParts.Count -ne 2) { throw 'Source repository identity is invalid' }
           $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-build-output'
