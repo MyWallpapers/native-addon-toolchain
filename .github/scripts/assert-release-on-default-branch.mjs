@@ -9,6 +9,7 @@ const REQUEST_TIMEOUT_MS = 15_000
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/u
 const REPOSITORY_ID_PATTERN = /^[1-9][0-9]{0,15}$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
+const RELEASE_REF_PATTERN = /^refs\/tags\/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 
 function fail(message) {
   throw new Error(message)
@@ -20,13 +21,13 @@ function parseOptions(argv) {
     const key = argv[index]
     const value = argv[index + 1]
     if (!key?.startsWith('--') || value === undefined || value.startsWith('--')) {
-      fail('Expected --repository, --repository-id and --commit-sha arguments.')
+      fail('Expected release source identity arguments.')
     }
     if (options.has(key)) fail(`Duplicate option: ${key}`)
     options.set(key, value)
   }
   for (const key of options.keys()) {
-    if (key !== '--repository' && key !== '--repository-id' && key !== '--commit-sha') {
+    if (!['--repository', '--repository-id', '--commit-sha', '--release-ref'].includes(key)) {
       fail(`Unknown option: ${key}`)
     }
   }
@@ -88,6 +89,7 @@ export async function assertReleaseOnDefaultBranch({
   repository,
   repositoryId,
   commitSha,
+  releaseRef = null,
   token,
   apiUrl = GITHUB_API,
   fetchImpl = globalThis.fetch,
@@ -95,6 +97,9 @@ export async function assertReleaseOnDefaultBranch({
   if (!REPOSITORY_PATTERN.test(repository ?? '')) fail('Repository identity is invalid.')
   if (!REPOSITORY_ID_PATTERN.test(repositoryId ?? '')) fail('Numeric repository identity is invalid.')
   if (!SHA_PATTERN.test(commitSha ?? '')) fail('Release commit SHA is invalid.')
+  if (releaseRef !== null && !RELEASE_REF_PATTERN.test(releaseRef)) {
+    fail('Release tag ref is invalid.')
+  }
   if (typeof token !== 'string' || token.length === 0) fail('GitHub token is required.')
   if (apiUrl !== GITHUB_API && fetchImpl === globalThis.fetch) {
     fail('The live admission check must use the canonical GitHub API origin.')
@@ -115,6 +120,35 @@ export async function assertReleaseOnDefaultBranch({
     || metadata.disabled !== false
   ) {
     fail('GitHub repository identity or visibility differs from the release event.')
+  }
+  if (releaseRef !== null) {
+    const tagName = releaseRef.slice('refs/tags/'.length)
+    const tagReference = await githubGet(
+      `${prefix}/git/ref/tags/${encodeURIComponent(tagName)}`,
+      request,
+      'GitHub release tag lookup',
+    )
+    if (tagReference?.ref !== releaseRef || !SHA_PATTERN.test(tagReference?.object?.sha ?? '')) {
+      fail('GitHub release tag is not a canonical Git reference.')
+    }
+    let tagCommitSha
+    if (tagReference.object.type === 'commit') {
+      tagCommitSha = tagReference.object.sha
+    } else if (tagReference.object.type === 'tag') {
+      const annotatedTag = await githubGet(
+        `${prefix}/git/tags/${tagReference.object.sha}`,
+        request,
+        'GitHub annotated release tag lookup',
+      )
+      if (annotatedTag?.tag !== tagName || annotatedTag?.object?.type !== 'commit'
+        || !SHA_PATTERN.test(annotatedTag?.object?.sha ?? '')) {
+        fail('GitHub annotated release tag is nested, different or non-canonical.')
+      }
+      tagCommitSha = annotatedTag.object.sha
+    } else {
+      fail('GitHub release tag does not resolve directly to a commit.')
+    }
+    if (tagCommitSha !== commitSha) fail('GitHub release tag differs from the frozen commit SHA.')
   }
   const defaultBranch = metadata.default_branch
   if (
@@ -166,7 +200,12 @@ export async function assertReleaseOnDefaultBranch({
     fail('The tagged release commit is not reachable from the reviewed default branch.')
   }
 
-  return { commitSha, defaultBranch, defaultBranchHead }
+  return {
+    commitSha,
+    defaultBranch,
+    defaultBranchHead,
+    ...(releaseRef === null ? {} : { releaseRef }),
+  }
 }
 
 async function main() {
@@ -174,8 +213,9 @@ async function main() {
   const repository = options.get('--repository')
   const repositoryId = options.get('--repository-id')
   const commitSha = options.get('--commit-sha')
+  const releaseRef = options.get('--release-ref') ?? null
   if (
-    options.size !== 3
+    ![3, 4].includes(options.size)
     || repository === undefined
     || repositoryId === undefined
     || commitSha === undefined
@@ -186,6 +226,7 @@ async function main() {
     repository,
     repositoryId,
     commitSha,
+    releaseRef,
     token: process.env.MYWALLPAPER_GITHUB_TOKEN,
   })
   process.stdout.write(

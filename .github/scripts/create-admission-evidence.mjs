@@ -34,18 +34,23 @@ const REQUIRED_OPTIONS = [
   'run-id', 'run-attempt', 'runner-observation-output', 'output-root', 'operational-max-files',
   'operational-max-expanded-bytes', 'operational-max-metadata-bytes',
 ]
+const OPTIONAL_OPTIONS = ['publication-request-id', 'publication-attempt-id', 'source-version']
+const PUBLICATION_REQUEST_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const SEMVER_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 
 function fail(message) {
   throw new Error(message)
 }
 
 function parseArguments(argv) {
-  if (argv.length !== REQUIRED_OPTIONS.length * 2) fail('Admission evidence options are incomplete.')
+  if (argv.length < REQUIRED_OPTIONS.length * 2
+    || argv.length > (REQUIRED_OPTIONS.length + OPTIONAL_OPTIONS.length) * 2
+    || argv.length % 2 !== 0) fail('Admission evidence options are incomplete.')
   const values = new Map()
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index]?.replace(/^--/u, '')
     const value = argv[index + 1]
-    if (!REQUIRED_OPTIONS.includes(name) || !value || values.has(name)) {
+    if (![...REQUIRED_OPTIONS, ...OPTIONAL_OPTIONS].includes(name) || !value || values.has(name)) {
       fail(`Invalid admission evidence option: ${argv[index] ?? ''}`)
     }
     values.set(name, value)
@@ -306,6 +311,29 @@ async function main() {
   const repositoryName = requiredString(options['repository-name'], 'repository name', REPOSITORY_PATTERN, 140)
   const commitSha = requiredString(options['commit-sha'], 'commit SHA', COMMIT_PATTERN, 40)
   const workflowSha = requiredString(options['workflow-sha'], 'workflow SHA', COMMIT_PATTERN, 40)
+  const publicationRequestId = options['publication-request-id'] === undefined
+    ? null
+    : requiredString(
+      options['publication-request-id'],
+      'publication request ID',
+      PUBLICATION_REQUEST_PATTERN,
+      36,
+    )
+  const publicationAttemptId = options['publication-attempt-id'] === undefined
+    ? null
+    : requiredString(
+      options['publication-attempt-id'],
+      'publication attempt ID',
+      PUBLICATION_REQUEST_PATTERN,
+      36,
+    )
+  const sourceVersion = options['source-version'] === undefined
+    ? null
+    : requiredString(options['source-version'], 'source version', SEMVER_PATTERN, 128)
+  if (![publicationRequestId, publicationAttemptId, sourceVersion]
+    .every((value) => (value === null) === (publicationRequestId === null))) {
+    fail('Central publication request ID, attempt ID and source version must be supplied together.')
+  }
   const runId = requiredString(options['run-id'], 'workflow run ID', /^[1-9][0-9]*$/u, 32)
   const runAttempt = requiredString(options['run-attempt'], 'workflow run attempt', /^[1-9][0-9]*$/u, 16)
   const runnerObservationOutput = resolve(options['runner-observation-output'])
@@ -353,6 +381,10 @@ async function main() {
     || `${provenance.owner}/${provenance.name}`.toLowerCase() !== repositoryName.toLowerCase()
     || provenance.commitSha !== commitSha || !SHA256_PATTERN.test(bundleIndex.sourceDigest)
     || !SHA256_PATTERN.test(bundleIndex.manifestDigest)) fail('Bundle index provenance is inconsistent.')
+  if (sourceVersion !== null && (bundleIndex.version !== sourceVersion
+    || options['release-ref'] !== `refs/tags/v${sourceVersion}`)) {
+    fail('Frozen source version differs from the verified bundle or tag.')
+  }
   const distributionDigest = digestJson(bundleIndex)
   const archive = await digestBoundedRegularFile(options.archive, {
     label: 'release archive',
@@ -514,7 +546,15 @@ async function main() {
     predicate: {
       buildDefinition: {
         buildType: 'https://mywallpaper.online/buildTypes/addon-admission/v1',
-        externalParameters: { repository: repositoryName, repositoryId, commitSha, releaseRef },
+        externalParameters: {
+          repository: repositoryName,
+          repositoryId,
+          commitSha,
+          releaseRef,
+          ...(publicationRequestId === null
+            ? {}
+            : { publicationRequestId, publicationAttemptId, sourceVersion }),
+        },
         internalParameters: {
           workflowRef,
           workflowSha,
@@ -570,8 +610,11 @@ async function main() {
 
   const subject = {
     schemaVersion: 1,
-    contract: 'admission-v1',
+    contract: publicationRequestId === null ? 'admission-v1' : 'central-admission-v1',
     generatedAt,
+    ...(publicationRequestId === null ? {} : {
+      publication: { requestId: publicationRequestId, attemptId: publicationAttemptId },
+    }),
     source: {
       repositoryId,
       repository: repositoryName,

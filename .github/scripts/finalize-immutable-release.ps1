@@ -4,6 +4,11 @@ param(
   [Parameter(Mandatory = $true)][string]$ReleaseId,
   [Parameter(Mandatory = $true)][string]$TagName,
   [Parameter(Mandatory = $true)][string]$CommitSha,
+  [Parameter(Mandatory = $true)][string]$SourceRepository,
+  [Parameter(Mandatory = $true)][string]$SourceTagName,
+  [Parameter(Mandatory = $true)][string]$SourceCommitSha,
+  [Parameter(Mandatory = $false)][AllowEmptyString()][string]$PublicationRequestId = '',
+  [Parameter(Mandatory = $false)][AllowEmptyString()][string]$PublicationAttemptId = '',
   [Parameter(Mandatory = $true)][string]$BundleArtifact,
   [Parameter(Mandatory = $true)][string]$MaterialsArtifact
 )
@@ -13,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'github-api-contract.ps1')
 $ApiVersion = '2026-03-10'
 $SemVerTagPattern = '^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+$PublicationRequestPattern = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
 $Headers = @{
   Accept = 'application/vnd.github+json'
   Authorization = "Bearer $env:GITHUB_TOKEN"
@@ -24,8 +30,27 @@ if ($Repository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}
   throw 'Repository is invalid'
 }
 if ($ReleaseId -cnotmatch '^[1-9][0-9]*$') { throw 'ReleaseId must be a positive decimal string' }
-if ($TagName -cnotmatch $SemVerTagPattern) { throw 'TagName must be a v-prefixed canonical SemVer tag' }
 if ($CommitSha -cnotmatch '^[0-9a-f]{40}$') { throw 'CommitSha must be a lowercase full Git commit SHA' }
+if ($SourceRepository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$' -or
+    $SourceTagName -cnotmatch $SemVerTagPattern -or
+    $SourceCommitSha -cnotmatch '^[0-9a-f]{40}$') {
+  throw 'Immutable source identity is invalid'
+}
+$CentralPublication = -not [string]::IsNullOrEmpty($PublicationRequestId) -or
+  -not [string]::IsNullOrEmpty($PublicationAttemptId)
+if ($CentralPublication) {
+  if ($PublicationRequestId -cnotmatch $PublicationRequestPattern -or
+      $PublicationAttemptId -cnotmatch $PublicationRequestPattern -or
+      $Repository -cne 'MyWallpapers/native-addon-toolchain' -or
+      $TagName -cne "publication-$PublicationAttemptId") {
+    throw 'Central transport identity is invalid'
+  }
+} elseif ($TagName -cnotmatch $SemVerTagPattern -or
+          $Repository -cne $SourceRepository -or
+          $TagName -cne $SourceTagName -or
+          $CommitSha -cne $SourceCommitSha) {
+  throw 'Legacy transport must remain identical to its source release'
+}
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'GITHUB_TOKEN is required' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) { throw 'GITHUB_OUTPUT is required' }
 
@@ -46,13 +71,27 @@ foreach ($part in $AllParts) {
     Size = [long]$part.sizeBytes
   })
 }
-$ExpectedReleaseName = $TagName
-$ExpectedReleaseBody = [string]::Join("`n", @(
-  '<!-- mywallpaper-admission-v1 -->',
-  "Source commit: $CommitSha",
-  "Bundle: $($BundleDescriptor.sha256)",
-  "Materials: $($MaterialsDescriptor.sha256)"
-))
+$ExpectedReleaseName = if ($CentralPublication) { "$SourceRepository@$SourceTagName" } else { $TagName }
+$ExpectedReleaseBody = if ($CentralPublication) {
+  [string]::Join("`n", @(
+    '<!-- mywallpaper-central-admission-v1 -->',
+    "Publication request: $PublicationRequestId",
+    "Publication attempt: $PublicationAttemptId",
+    "Source repository: $SourceRepository",
+    "Source tag: $SourceTagName",
+    "Source commit: $SourceCommitSha",
+    "Toolchain commit: $CommitSha",
+    "Bundle: $($BundleDescriptor.sha256)",
+    "Materials: $($MaterialsDescriptor.sha256)"
+  ))
+} else {
+  [string]::Join("`n", @(
+    '<!-- mywallpaper-admission-v1 -->',
+    "Source commit: $CommitSha",
+    "Bundle: $($BundleDescriptor.sha256)",
+    "Materials: $($MaterialsDescriptor.sha256)"
+  ))
+}
 
 function Get-ErrorDetail([object]$Record) {
   if (-not [string]::IsNullOrWhiteSpace($Record.ErrorDetails.Message)) {
@@ -66,21 +105,21 @@ function Invoke-GitHubGet([string]$Uri, [string]$Label) {
   catch { throw "$Label failed: $(Get-ErrorDetail $_)" }
 }
 
-function Get-TagCommit() {
-  $encodedTag = [Uri]::EscapeDataString($TagName)
+function Get-TagCommit([string]$TagRepository, [string]$ExpectedTagName) {
+  $encodedTag = [Uri]::EscapeDataString($ExpectedTagName)
   $reference = Invoke-GitHubGet `
-    "https://api.github.com/repos/$Repository/git/ref/tags/$encodedTag" `
+    "https://api.github.com/repos/$TagRepository/git/ref/tags/$encodedTag" `
     'GitHub tag lookup'
-  if ([string]$reference.ref -cne "refs/tags/$TagName") { throw 'GitHub returned a different tag ref' }
+  if ([string]$reference.ref -cne "refs/tags/$ExpectedTagName") { throw 'GitHub returned a different tag ref' }
   $objectSha = [string]$reference.object.sha
   $objectType = [string]$reference.object.type
   if ($objectSha -cnotmatch '^[0-9a-f]{40}$') { throw 'GitHub tag target SHA is invalid' }
   if ($objectType -ceq 'commit') { return $objectSha }
   if ($objectType -cne 'tag') { throw "GitHub tag has unsupported target type: $objectType" }
   $tagObject = Invoke-GitHubGet `
-    "https://api.github.com/repos/$Repository/git/tags/$objectSha" `
+    "https://api.github.com/repos/$TagRepository/git/tags/$objectSha" `
     'GitHub annotated-tag lookup'
-  if ([string]$tagObject.tag -cne $TagName -or [string]$tagObject.object.type -cne 'commit') {
+  if ([string]$tagObject.tag -cne $ExpectedTagName -or [string]$tagObject.object.type -cne 'commit') {
     throw 'Nested, non-commit or different annotated tag is not admissible'
   }
   $peeledSha = [string]$tagObject.object.sha
@@ -167,7 +206,9 @@ function Wait-ImmutableRelease() {
   throw 'GitHub published the release but did not confirm its immutable lock in time'
 }
 
-if ((Get-TagCommit) -cne $CommitSha) { throw 'GitHub tag no longer resolves to the triggering commit' }
+if ((Get-TagCommit $SourceRepository $SourceTagName) -cne $SourceCommitSha) {
+  throw 'GitHub source tag no longer resolves to the frozen source commit'
+}
 $release = Get-Release
 $state = Assert-ControlledRelease $release
 Assert-ExactAssets
@@ -179,7 +220,7 @@ if ($state -ceq 'draft') {
     body = $ExpectedReleaseBody
     draft = $false
     prerelease = $false
-    make_latest = 'legacy'
+    make_latest = if ($CentralPublication) { 'false' } else { 'legacy' }
   } | ConvertTo-Json -Depth 4 -Compress
   try {
     $release = Invoke-RestMethod `
@@ -197,8 +238,11 @@ if ($state -ceq 'draft') {
 }
 $release = Wait-ImmutableRelease
 Assert-ExactAssets
-if ((Get-TagCommit) -cne $CommitSha) {
-  throw 'Immutable GitHub release tag differs from the triggering commit'
+if ((Get-TagCommit $SourceRepository $SourceTagName) -cne $SourceCommitSha) {
+  throw 'GitHub source tag changed while publishing the immutable transport'
+}
+if ((Get-TagCommit $Repository $TagName) -cne $CommitSha) {
+  throw 'Immutable GitHub transport tag differs from its trusted toolchain commit'
 }
 "release-id=$ReleaseId" >> $env:GITHUB_OUTPUT
 'release-immutable=true' >> $env:GITHUB_OUTPUT

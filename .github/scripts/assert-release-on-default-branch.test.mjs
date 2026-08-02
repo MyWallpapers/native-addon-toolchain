@@ -7,6 +7,7 @@ const repository = 'MyWallpapers/example-addon'
 const repositoryId = '123456789'
 const commitSha = '1'.repeat(40)
 const defaultBranchHead = '2'.repeat(40)
+const releaseRef = 'refs/tags/v1.2.3'
 
 function json(value, init = {}) {
   return new Response(JSON.stringify(value), {
@@ -32,6 +33,20 @@ function api(overrides = {}) {
       })
     }
     const defaultBranch = overrides.repository?.default_branch ?? 'main'
+    if (url.pathname.endsWith('/git/ref/tags/v1.2.3')) {
+      return json({
+        ref: releaseRef,
+        object: { type: 'commit', sha: commitSha },
+        ...overrides.tagReference,
+      })
+    }
+    if (url.pathname.endsWith(`/git/tags/${'3'.repeat(40)}`)) {
+      return json({
+        tag: 'v1.2.3',
+        object: { type: 'commit', sha: commitSha },
+        ...overrides.annotatedTag,
+      })
+    }
     if (url.pathname.endsWith(`/git/ref/heads/${defaultBranch}`)) {
       return json({
         ref: `refs/heads/${defaultBranch}`,
@@ -131,5 +146,67 @@ test('rejects an inconsistent ahead count fail closed', async () => {
   await assert.rejects(
     verify({ comparison: { ahead_by: 0 } }),
     /not reachable from the reviewed default branch/u,
+  )
+})
+
+test('binds the exact release tag ref to the frozen commit', async () => {
+  const mock = api()
+  const result = await assertReleaseOnDefaultBranch({
+    repository,
+    repositoryId,
+    commitSha,
+    releaseRef,
+    token: 'test-token',
+    apiUrl: 'https://api.github.test',
+    fetchImpl: mock.fetchImpl,
+  })
+  assert.equal(result.releaseRef, releaseRef)
+  assert.equal(mock.calls.length, 4)
+})
+
+test('accepts one annotated release tag and rejects nested tags', async () => {
+  const accepted = api({
+    tagReference: { object: { type: 'tag', sha: '3'.repeat(40) } },
+  })
+  await assertReleaseOnDefaultBranch({
+    repository,
+    repositoryId,
+    commitSha,
+    releaseRef,
+    token: 'test-token',
+    apiUrl: 'https://api.github.test',
+    fetchImpl: accepted.fetchImpl,
+  })
+  const rejected = api({
+    tagReference: { object: { type: 'tag', sha: '3'.repeat(40) } },
+    annotatedTag: { object: { type: 'tag', sha: '4'.repeat(40) } },
+  })
+  await assert.rejects(
+    assertReleaseOnDefaultBranch({
+      repository,
+      repositoryId,
+      commitSha,
+      releaseRef,
+      token: 'test-token',
+      apiUrl: 'https://api.github.test',
+      fetchImpl: rejected.fetchImpl,
+    }),
+    /annotated release tag is nested/u,
+  )
+})
+
+test('rejects a release tag moved away from the frozen commit', async () => {
+  const mock = api({ tagReference: { object: { type: 'commit', sha: '4'.repeat(40) } } })
+  await assert.rejects(
+    assertReleaseOnDefaultBranch({
+      repository,
+      repositoryId,
+      commitSha,
+      releaseRef,
+      token: 'test-token',
+      apiUrl: 'https://api.github.test',
+      fetchImpl: mock.fetchImpl,
+    }),
+    /differs from the frozen commit/u,
   )
 })

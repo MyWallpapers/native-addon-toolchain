@@ -49,6 +49,7 @@ jobs:
             '.github/scripts/safe-files.test.mjs',
             '.github/scripts/verify-runner-observation-predicate.mjs',
             '.github/scripts/verify-control-plane-workflows.mjs',
+            '.github/scripts/verify-central-publication-workflow.mjs',
             '.github/scripts/write-runner-observation.mjs',
             '.github/scripts/verify-admission-workflow.mjs'
           )) {
@@ -87,6 +88,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 workflow contract verification failed' }
           node .github/scripts/verify-control-plane-workflows.mjs
           if ($LASTEXITCODE -ne 0) { throw 'toolchain control-plane workflow verification failed' }
+          node .github/scripts/verify-central-publication-workflow.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'central publication workflow contract verification failed' }
           node --test .github/scripts/assert-release-on-default-branch.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'release-on-default-branch ancestry tests failed' }
           node --test .github/scripts/create-admission-evidence.test.mjs

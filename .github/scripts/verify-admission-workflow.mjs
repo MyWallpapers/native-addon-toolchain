@@ -305,7 +305,10 @@ for (const [value, label] of [
   [buildMainGuardStep, 'replica reviewed default-branch check'],
   [publisherMainGuardStep, 'publisher reviewed default-branch check'],
 ]) {
-  requireText(value, '--repository-id "$env:GITHUB_REPOSITORY_ID"', `${label} numeric identity binding`)
+  requireText(value, '--repository $env:SOURCE_REPOSITORY', `${label} repository binding`)
+  requireText(value, '--repository-id $env:SOURCE_REPOSITORY_ID', `${label} numeric identity binding`)
+  requireText(value, '--commit-sha $env:SOURCE_COMMIT_SHA', `${label} commit binding`)
+  requireText(value, '--release-ref $env:SOURCE_REF', `${label} immutable tag binding`)
 }
 for (const [fragment, label] of [
   ["const defaultBranch = metadata.default_branch", 'public default-branch binding'],
@@ -412,8 +415,8 @@ if (draftIndex < 0 || attestIndex <= draftIndex || proofIndex <= attestIndex || 
   || evidenceIndex <= ingestionIndex || finalizerIndex <= evidenceIndex) {
   fail('Draft, attestation, immutable publication, ingestion and finalization are out of order.')
 }
-if ((publisher.match(/ACTIONS_ID_TOKEN_REQUEST_TOKEN/gu) ?? []).length !== 2) {
-  fail('The publisher must request separate ingestion and finalizer OIDC tokens.')
+if ((publisher.match(/ACTIONS_ID_TOKEN_REQUEST_TOKEN/gu) ?? []).length !== 3) {
+  fail('The publisher must request separate verification, ingestion and finalizer OIDC tokens.')
 }
 for (const forbiddenHeader of [
   'X-MyWallpaper-Admission-Contract',
