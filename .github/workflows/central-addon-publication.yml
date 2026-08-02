@@ -103,13 +103,13 @@ jobs:
           SOURCE_VERSION: ${{ inputs.source_version }}
         run: |
           if ($env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-              $env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
               $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or
               $env:GITHUB_WORKFLOW_REF -cne "$env:GITHUB_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:GITHUB_REF" -or
               $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
               $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
               $env:GITHUB_RUN_ATTEMPT -cne '1') {
-            throw 'Central publication was not dispatched from the protected toolchain main branch'
+            throw 'Central publication was not dispatched from an immutable toolchain release tag'
           }
           if ($env:SOURCE_REPOSITORY_ID -cnotmatch '^[1-9][0-9]{0,15}$' -or
               $env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$' -or
@@ -252,12 +252,12 @@ jobs:
         run: |
           if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
               $env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-              $env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
               $env:GITHUB_WORKFLOW_REF -cne "$env:GITHUB_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:GITHUB_REF" -or
               $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
               $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
               $env:GITHUB_RUN_ATTEMPT -cne '1') {
-            throw 'Central publication completion requires the exact GitHub-hosted protected-main workflow'
+            throw 'Central publication completion requires the exact immutable GitHub-hosted toolchain release'
           }
           if ($env:PUBLICATION_REQUEST_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
               $env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {

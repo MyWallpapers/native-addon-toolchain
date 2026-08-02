@@ -102,7 +102,7 @@ for (const value of [authorize, complete]) {
 }
 requireText(authorize, "-cne 'github-hosted'", 'the GitHub-hosted runner guard')
 requireText(authorize, "$env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain'", 'the exact toolchain repository guard')
-requireText(authorize, "$env:GITHUB_REF -cne 'refs/heads/main'", 'the protected-main ref guard')
+requireText(authorize, "$env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v", 'the immutable toolchain release ref guard')
 requireText(authorize, '$env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA', 'the exact wrapper workflow SHA guard')
 requireText(authorize, "$env:GITHUB_RUN_ATTEMPT -cne '1'", 'one immutable GitHub run per attempt')
 requireText(authorize, 'sourceRepositoryId = $env:SOURCE_REPOSITORY_ID', 'numeric source identity in the claim')
@@ -200,7 +200,7 @@ for (const [value, label] of [[build, 'build'], [verifier, 'verifier']]) {
 requireText(build, 'replica: [1, 2]', 'two independent builds')
 requireText(verifier, 'function Assert-ByteIdentical', 'fresh byte-identity verification')
 requireCount(reusable, "github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''", 3, 'central dispatch job guards')
-requireCount(reusable, "$env:DISPATCH_REF -cne 'refs/heads/main'", 3, 'protected-main runtime guards')
+requireCount(reusable, "$env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v", 3, 'immutable toolchain release runtime guards')
 requireCount(reusable, '$env:DISPATCH_SHA -cne $env:WORKFLOW_SHA', 3, 'exact toolchain SHA guards')
 requireCount(reusable, 'DISPATCH_REPOSITORY: ${{ github.repository }}', 3, 'dispatch repository env mappings')
 requireCount(reusable, 'DISPATCH_REF: ${{ github.ref }}', 3, 'dispatch ref env mappings')
@@ -236,7 +236,7 @@ requireText(reusable, '$subject.publication.attemptId -cne $env:PUBLICATION_ATTE
 for (const endpoint of [
   '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete',
   '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion',
-  '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
+  '/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
 ]) requireCount(reusable, endpoint, 2, `development and production ${endpoint}`)
 requireText(publisher, "if: inputs.publication_request_id != ''", 'central-only successful verification callback')
 requireText(publisher, "outcome = 'succeeded'", 'successful double-rebuild completion')
@@ -271,10 +271,8 @@ requireText(finalizer, '[bool]$Release.immutable', 'immutable GitHub release enf
 requireText(preparer, 'function Ensure-CentralTransportTag', 'explicit central transport tag creation')
 requireText(preparer, '"https://api.github.com/repos/$Repository/git/refs"', 'fixed GitHub transport ref endpoint')
 requireText(preparer, 'Get-TagCommit $Repository $TagName', 'post-create transport tag verification')
-requireText(
-  nativeEvidence,
-  "repositoryRef: centralPublication ? 'refs/heads/main' : 'refs/heads/admission-v1'",
-  'truthful central-versus-legacy workflow ref evidence',
-)
+requireText(nativeEvidence, "'workflow-ref'", 'explicit immutable workflow repository ref input')
+requireText(nativeEvidence, 'CENTRAL_TOOLCHAIN_REF_PATTERN', 'central toolchain release ref validation')
+requireText(nativeEvidence, 'repositoryRef: workflowRef', 'truthful workflow ref evidence')
 
 process.stdout.write('central add-on publication workflow contract is intact\n')

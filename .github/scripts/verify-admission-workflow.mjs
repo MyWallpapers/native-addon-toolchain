@@ -370,6 +370,7 @@ if (publisher.includes('subject-attestation') || publisher.includes('materials-a
   fail('Admission subject and materials must be submitted to the finalizer, not separately attested.')
 }
 requireText(publisher, 'create-native-build-evidence.mjs', 'NativeBuildEvidenceV1 transformation')
+requireText(publisher, '--workflow-ref $env:WORKFLOW_REPOSITORY_REF', 'explicit workflow repository ref evidence')
 if (nativeEvidenceGenerator.includes("'workflow-run-id'")
   || nativeEvidenceGenerator.includes("'workflow-run-attempt'")) {
   fail('Stable NativeBuildEvidenceV1 must not contain workflow attempt identity.')

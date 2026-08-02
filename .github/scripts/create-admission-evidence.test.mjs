@@ -301,6 +301,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--native-manifest-digest', digest(Buffer.from('native-manifest', 'utf8')),
       '--materials-digest', digest(await readFile(materialsPath)),
       '--materials-size', String((await readFile(materialsPath)).length),
+      '--workflow-ref', 'refs/heads/admission-v1',
       '--workflow-sha', workflowSha,
       '--output', nativeEvidencePath,
     ], { encoding: 'utf8' })
@@ -328,13 +329,14 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--native-manifest-digest', digest(Buffer.from('central-native-manifest', 'utf8')),
       '--materials-digest', digest(await readFile(materialsPath)),
       '--materials-size', String((await readFile(materialsPath)).length),
+      '--workflow-ref', 'refs/tags/central-publication-v1.0.0',
       '--workflow-sha', workflowSha,
       '--output', centralNativeEvidencePath,
     ], { encoding: 'utf8' })
     assert.equal(centralNativeEvidenceResult.status, 0, centralNativeEvidenceResult.stderr)
     const centralNativeEvidence = JSON.parse(await readFile(centralNativeEvidencePath, 'utf8'))
     assert.equal(centralNativeEvidence.checklistVersion, 'central-native-build-integrity-v1')
-    assert.equal(centralNativeEvidence.workflow.repositoryRef, 'refs/heads/main')
+    assert.equal(centralNativeEvidence.workflow.repositoryRef, 'refs/tags/central-publication-v1.0.0')
     assert.deepEqual(centralNativeEvidence.publication, {
       requestId: publicationRequestId,
       attemptId: publicationAttemptId,
@@ -354,6 +356,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--native-manifest-digest', digest(Buffer.from('native-manifest', 'utf8')),
       '--materials-digest', digest(await readFile(materialsPath)),
       '--materials-size', String((await readFile(materialsPath)).length),
+      '--workflow-ref', 'refs/heads/admission-v1',
       '--workflow-sha', workflowSha,
       '--output', join(temporary, 'rejected-native-build-evidence.json'),
     ], { encoding: 'utf8' })
