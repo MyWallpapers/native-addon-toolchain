@@ -57,7 +57,10 @@ caller code and is checked again immediately before GitHub Release publication:
 There are four runner executions: two replicas from one matrix job, one
 verifier and one publisher. Build replicas have no OIDC permission; every web,
 companion and hook reproduction must match by relative path, byte size and
-SHA-256. The verifier treats transferred outputs as data and is the sole writer
+SHA-256. Cargo-based Windows companions are linked with `rust-lld` from the
+repository-pinned Rust toolchain, rather than the mutable MSVC linker shipped
+by a hosted-runner image. The verifier treats transferred outputs as data and
+is the sole writer
 of the archive and subject. The Ubuntu publisher only downloads opaque files,
 checks their size, SHA-256 and cross-bindings, and never checks out or extracts
 add-on source. It materializes only the static trusted toolchain repository at

@@ -102,6 +102,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'runner observation contract tests failed' }
           node --test .github/scripts/safe-files.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'descriptor-bound safe file tests failed' }
+          node --test .github/scripts/build-native-companions.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'native companion linker policy tests failed' }
           & .github/scripts/materialize-immutable-repository.test.ps1 `
             -Repository $env:GITHUB_REPOSITORY `
             -CommitSha $env:IMMUTABLE_CHECKOUT_TEST_SHA

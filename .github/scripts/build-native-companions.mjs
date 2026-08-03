@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFile, readdir, lstat, mkdir, copyFile, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -182,12 +182,74 @@ function selectedBuilds(config, entries) {
   return selected;
 }
 
-async function runBuild(build, repositoryRoot) {
+function commandFileName(command) {
+  return command.replaceAll("\\", "/").split("/").at(-1).toLowerCase();
+}
+
+function usesCargo(build) {
+  return new Set(["cargo", "cargo.exe"]).has(commandFileName(build.command));
+}
+
+export function pinnedRustLinkerEnvironment(builds, rustLldPath) {
+  if (!builds.some(usesCargo)) return {};
+  const linker = nonEmptyString(rustLldPath, "Pinned rust-lld path").trim();
+  if (!isAbsolute(linker) || commandFileName(linker) !== "rust-lld.exe") {
+    throw new Error("Pinned rust-lld path must be an absolute rust-lld.exe path.");
+  }
+  return {
+    CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: linker,
+    CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER: linker,
+  };
+}
+
+export function rustLldPathFromToolchain(sysrootValue, verboseVersion) {
+  const sysroot = nonEmptyString(sysrootValue, "Rust sysroot").trim();
+  if (!isAbsolute(sysroot)) throw new Error("Rust sysroot must be absolute.");
+  const host = nonEmptyString(verboseVersion, "Rust verbose version")
+    .split(/\r?\n/u)
+    .find((line) => line.startsWith("host: "))
+    ?.slice("host: ".length);
+  if (!host || !/^[A-Za-z0-9_-]+$/u.test(host)) {
+    throw new Error("Rust verbose version does not declare a canonical host triple.");
+  }
+  return join(sysroot, "lib", "rustlib", host, "bin", "rust-lld.exe");
+}
+
+async function resolvePinnedRustLinkerEnvironment(builds, repositoryRoot) {
+  if (!builds.some(usesCargo)) return {};
+  if (process.platform !== "win32") {
+    throw new Error("Cargo-based Windows companion builds require a Windows build boundary.");
+  }
+  const invocation = (args) => spawnSync("rustc.exe", args, {
+    cwd: repositoryRoot,
+    env: process.env,
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  const sysrootResult = invocation(["--print", "sysroot"]);
+  const versionResult = invocation(["-vV"]);
+  if ([sysrootResult, versionResult].some((result) =>
+    result.error || result.status !== 0 || result.signal !== null)) {
+    throw new Error("Could not inspect the repository-pinned Rust toolchain.");
+  }
+  const rustLldPath = rustLldPathFromToolchain(sysrootResult.stdout, versionResult.stdout);
+  const environment = pinnedRustLinkerEnvironment(builds, rustLldPath);
+  const linker = environment.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER;
+  const metadata = await lstat(linker).catch(() => null);
+  if (!metadata?.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("Pinned rust-lld must resolve to a regular file, not a link or junction.");
+  }
+  process.stdout.write("Cargo-based Windows companions use rust-lld from the pinned Rust toolchain.\n");
+  return environment;
+}
+
+async function runBuild(build, repositoryRoot, trustedEnvironment) {
   const cwd = build.cwd === "." ? repositoryRoot : inside(repositoryRoot, build.cwd, `native build ${build.id} cwd`);
   await new Promise((accept, reject) => {
     const child = spawn(build.command, build.args, {
       cwd,
-      env: { ...process.env, ...build.env },
+      env: { ...process.env, ...build.env, ...trustedEnvironment },
       shell: false,
       stdio: "inherit",
       windowsHide: true,
@@ -241,9 +303,10 @@ export async function buildNativeCompanions({ repositoryRoot, outputRoot }) {
   const configPath = join(repositoryRoot, "mywallpaper.config.json");
   const configBytes = await readFile(configPath);
   const builds = selectedBuilds(parseJson(configBytes, "mywallpaper.config.json"), entries);
+  const trustedEnvironment = await resolvePinnedRustLinkerEnvironment(builds, repositoryRoot);
   for (const build of builds) {
     process.stdout.write(`[companion:${build.id}] building\n`);
-    await runBuild(build, repositoryRoot);
+    await runBuild(build, repositoryRoot, trustedEnvironment);
     for (const output of build.outputs) {
       const metadata = await lstat(inside(repositoryRoot, output, `native build ${build.id} output`)).catch(() => null);
       if (!metadata || metadata.isSymbolicLink() || (!metadata.isFile() && !metadata.isDirectory())) {
