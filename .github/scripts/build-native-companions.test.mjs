@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
 import {
+  companionEntries,
   pinnedRustLinkerEnvironment,
   rustLldPathFromToolchain,
 } from "./build-native-companions.mjs";
@@ -13,14 +14,29 @@ test("does not constrain non-Cargo native builds", () => {
   );
 });
 
-test("pins both Windows Rust targets to one reviewed rust-lld", () => {
+test("pins the Windows x64 Rust target to the reviewed rust-lld", () => {
   const linker = resolve("toolchain", "rust-lld.exe");
   assert.deepEqual(
     pinnedRustLinkerEnvironment([{ command: "cargo.exe" }], linker),
     {
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: linker,
-      CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER: linker,
     },
+  );
+});
+
+test("rejects an unsupported companion target", () => {
+  assert.throws(
+    () => companionEntries({
+      native: {
+        companion: {
+          runtime: "process-v2",
+          entries: {
+            "windows-unsupported": "native/out/windows-unsupported/companion.exe",
+          },
+        },
+      },
+    }),
+    /Unsupported companion target: windows-unsupported/u,
   );
 });
 
