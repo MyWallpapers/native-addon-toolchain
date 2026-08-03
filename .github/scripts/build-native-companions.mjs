@@ -5,7 +5,7 @@ import { readFile, readdir, lstat, mkdir, copyFile, rm, writeFile } from "node:f
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const COMPANION_TARGETS = new Set(["windows-x86_64", "windows-aarch64"]);
+const COMPANION_TARGETS = new Set(["windows-x86_64"]);
 const MAX_NATIVE_PATH_BYTES = 900;
 const WINDOWS_RESERVED_PATH_STEMS = new Set([
   "CON", "PRN", "AUX", "NUL",
@@ -101,7 +101,7 @@ function parseJson(bytes, label) {
   }
 }
 
-function companionEntries(manifest) {
+export function companionEntries(manifest) {
   const companion = record(manifest?.native) ? manifest.native.companion : undefined;
   if (companion === undefined || companion === null) return [];
   if (!record(companion) || companion.runtime !== "process-v2" || !record(companion.entries)) {
@@ -198,7 +198,6 @@ export function pinnedRustLinkerEnvironment(builds, rustLldPath) {
   }
   return {
     CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: linker,
-    CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER: linker,
   };
 }
 
