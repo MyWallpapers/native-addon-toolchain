@@ -6,6 +6,7 @@
 // @version         1.0.0
 // @author          MyWallpaper
 // @include         explorer.exe
+// @architecture    x86-64
 // ==/WindhawkMod==
 
 BOOL Wh_ModInit() {
