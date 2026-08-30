@@ -27,7 +27,7 @@ caller code and is checked again immediately before GitHub Release publication:
    credentials, verify the
    content-addressed release validator exported from MyWallpaper, require both web
    and native reproductions to be byte-identical, then
-   validate the `canvas-v1` manifest, root `LICENSE`, author thumbnail and
+   validate the canonical manifest, root `LICENSE`, author thumbnail and
    companion outputs without executing a caller build script or distributed
    binary;
 6. inventory every distributed file with size, media type and SHA-256;

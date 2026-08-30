@@ -68,7 +68,7 @@ function runnerObservation(replica, workflowSha, imageVersion = '20260719.1') {
       windowsSdk: { availableVersions: ['10.0.26100.0'] },
       windhawk: {
         used: true,
-        windhawkCommit: '4'.repeat(40),
+        windhawkSourceCommit: '4'.repeat(40),
         archiveSha256: `sha256:${'5'.repeat(64)}`,
         clang: {
           sha256: `sha256:${'6'.repeat(64)}`,
@@ -146,7 +146,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       },
       sourceDigest: digest(sourceTree),
       manifestDigest: digest(Buffer.from('{"version":"1.2.3"}', 'utf8')),
-      capabilitySnapshot: { runtime: 'canvas-v1', settings: [], native: null, ui: null },
+      capabilitySnapshot: { runtime: 'canvas-native-v1', settings: [], native: null, ui: null },
       entry: 'dist/index.html',
       files: rawPayload,
     }

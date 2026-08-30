@@ -48,7 +48,7 @@ function observation(replica, overrides = {}) {
       windowsSdk: { availableVersions: ['10.0.22621.0', '10.0.26100.0'] },
       windhawk: {
         used: true,
-        windhawkCommit: '4'.repeat(40),
+        windhawkSourceCommit: '4'.repeat(40),
         archiveSha256: `sha256:${'5'.repeat(64)}`,
         clang: { sha256: `sha256:${'6'.repeat(64)}`, version: 'clang version 20.1.8' },
         linker: { sha256: `sha256:${'7'.repeat(64)}`, version: 'LLD 20.1.8' },
@@ -112,7 +112,7 @@ test('an unused pinned Windhawk toolchain is represented without fake executable
   const value = observation(1)
   value.tools.windhawk = {
     used: false,
-    windhawkCommit: '4'.repeat(40),
+    windhawkSourceCommit: '4'.repeat(40),
     archiveSha256: `sha256:${'5'.repeat(64)}`,
     clang: null,
     linker: null,

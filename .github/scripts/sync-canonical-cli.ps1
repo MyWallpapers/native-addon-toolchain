@@ -98,8 +98,13 @@ try {
   New-Item -ItemType Directory -Path $SdkDestination -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $SdkRoot 'package.json') -Destination (Join-Path $SdkDestination 'package.json')
   Copy-Item -LiteralPath (Join-Path $SdkRoot 'LICENSE') -Destination (Join-Path $SdkDestination 'LICENSE')
+  New-Item -ItemType Directory -Path (Join-Path $SdkDestination 'dist') -Force | Out-Null
+  # The release validator imports these two small SDK primitives directly and
+  # the schema modules import json-value transitively. Keep the exported
+  # package self-contained instead of relying on a workspace install.
+  Copy-Item -LiteralPath (Join-Path $SdkRoot 'dist/canonical-json.js') -Destination (Join-Path $SdkDestination 'dist/canonical-json.js')
+  Copy-Item -LiteralPath (Join-Path $SdkRoot 'dist/json-value.js') -Destination (Join-Path $SdkDestination 'dist/json-value.js')
   Copy-RegularTree (Join-Path $SdkRoot 'dist/addon-schema') (Join-Path $SdkDestination 'dist/addon-schema') '*.js'
-  Copy-RegularTree (Join-Path $SdkRoot 'dist/protocol') (Join-Path $SdkDestination 'dist/protocol') '*.js'
   Copy-RegularTree (Join-Path $SdkRoot 'dist/generated') (Join-Path $SdkDestination 'dist/generated') '*.js'
 
   $SharpRoot = Resolve-NodePackageRoot $CliRoot 'sharp'

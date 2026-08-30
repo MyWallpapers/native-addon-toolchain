@@ -18,7 +18,7 @@ try {
   $source = Join-Path $temporary 'source'
   New-Item -ItemType Directory -Path "$source/dist", "$source/assets" -Force | Out-Null
   [ordered]@{
-    runtime = 'canvas-v1'
+    runtime = 'canvas-native-v1'
     name = 'Admission fixture'
     description = 'Exercises the public admission-v1 evidence boundary.'
     version = '1.2.3'
@@ -119,7 +119,7 @@ try {
         windowsSdk = [ordered]@{ availableVersions = @('10.0.26100.0') }
         windhawk = [ordered]@{
           used = $false
-          windhawkCommit = ''.PadLeft(40, '4')
+          windhawkSourceCommit = ''.PadLeft(40, '4')
           archiveSha256 = 'sha256:' + ''.PadLeft(64, '5')
           clang = $null
           linker = $null

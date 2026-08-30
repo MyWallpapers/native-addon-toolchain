@@ -153,8 +153,8 @@ if ($WindowsSdkVersions.Count -eq 0) { throw 'No complete Windows SDK was observ
 
 $WindhawkLockPath = Join-Path $CanonicalCliRoot 'cli/dist/windhawk/windhawk-v1.lock.json'
 $WindhawkLock = Get-Content -LiteralPath $WindhawkLockPath -Raw | ConvertFrom-Json
-if ($WindhawkLock.schemaVersion -ne 2 -or $WindhawkLock.runtime -cne 'windhawk-v1' -or
-    [string]$WindhawkLock.upstream.commit -cnotmatch '^[0-9a-f]{40}$' -or
+if ($WindhawkLock.schemaVersion -ne 3 -or $WindhawkLock.runtime -cne 'windhawk-v1' -or
+    [string]$WindhawkLock.upstream.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or
     [string]$WindhawkLock.toolchainArchive.sha256 -cnotmatch '^[0-9a-f]{64}$') {
   throw 'Canonical Windhawk toolchain lock is invalid'
 }
@@ -168,11 +168,15 @@ if (-not $EmptyHooks) {
   }
   $MarkerPath = Join-Path $CompilerRoots[0].FullName 'mywallpaper-toolchain.json'
   $Marker = Get-Content -LiteralPath $MarkerPath -Raw | ConvertFrom-Json
-  $ExpectedMarkerFields = @('abi', 'archiveSha256', 'schemaVersion', 'sdkHeaderSha256', 'windhawkCommit')
+  $ExpectedMarkerFields = @(
+    'abi', 'archiveSha256', 'extractedFileCount',
+    'extractedInventorySha256', 'lockSha256', 'schemaVersion',
+    'windhawkSourceCommit'
+  )
   $ActualMarkerFields = @($Marker.PSObject.Properties.Name | Sort-Object)
   if (@(Compare-Object $ExpectedMarkerFields $ActualMarkerFields -SyncWindow 0).Count -ne 0 -or
-      $Marker.schemaVersion -ne 2 -or $Marker.abi -cne 'windhawk-v1' -or
-      $Marker.windhawkCommit -cne [string]$WindhawkLock.upstream.commit -or
+      $Marker.schemaVersion -ne 5 -or $Marker.abi -cne 'windhawk-v1' -or
+      $Marker.windhawkSourceCommit -cne [string]$WindhawkLock.upstream.sourceCommit -or
       $Marker.archiveSha256 -cne [string]$WindhawkLock.toolchainArchive.sha256) {
     throw 'Observed Windhawk toolchain marker differs from the canonical lock'
   }
@@ -220,7 +224,7 @@ $Observation = [ordered]@{
     windowsSdk = [ordered]@{ availableVersions = $WindowsSdkVersions }
     windhawk = [ordered]@{
       used = -not $EmptyHooks
-      windhawkCommit = [string]$WindhawkLock.upstream.commit
+      windhawkSourceCommit = [string]$WindhawkLock.upstream.sourceCommit
       archiveSha256 = 'sha256:' + [string]$WindhawkLock.toolchainArchive.sha256
       clang = $WindhawkClang
       linker = $WindhawkLinker
