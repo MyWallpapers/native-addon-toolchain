@@ -1180,14 +1180,14 @@ jobs:
 
       - name: Attest the exact bundle digest with GitHub and Sigstore
         id: bundle-attestation
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: mywallpaper-addon-bundle.zip
           subject-digest: ${{ needs.verify-package.outputs.archive-sha256 }}
 
       - name: Attest volatile build-runner observations for the exact bundle
         id: runner-observation-attestation
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: mywallpaper-addon-bundle.zip
           subject-digest: ${{ needs.verify-package.outputs.archive-sha256 }}
