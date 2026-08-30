@@ -18,7 +18,7 @@ try {
   $source = Join-Path $temporary 'source'
   New-Item -ItemType Directory -Path "$source/dist", "$source/assets" -Force | Out-Null
   [ordered]@{
-    runtime = 'canvas-v1'
+    runtime = 'canvas-native-v1'
     name = 'Admission fixture'
     description = 'Exercises the public admission-v1 evidence boundary.'
     version = '1.2.3'

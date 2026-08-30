@@ -146,7 +146,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       },
       sourceDigest: digest(sourceTree),
       manifestDigest: digest(Buffer.from('{"version":"1.2.3"}', 'utf8')),
-      capabilitySnapshot: { runtime: 'canvas-v1', settings: [], native: null, ui: null },
+      capabilitySnapshot: { runtime: 'canvas-native-v1', settings: [], native: null, ui: null },
       entry: 'dist/index.html',
       files: rawPayload,
     }

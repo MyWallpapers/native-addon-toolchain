@@ -1,3 +1,13 @@
+#include <windows.h>
+// ==WindhawkMod==
+// @id              build-smoke
+// @name            MyWallpaper native hook build smoke
+// @description     Exercises the official Windhawk build and bundle pipeline.
+// @version         1.0.0
+// @author          MyWallpaper
+// @include         explorer.exe
+// ==/WindhawkMod==
+
 #include <mywallpaper_settings.hpp>
 #include <mywallpaper_windhawk.hpp>
 

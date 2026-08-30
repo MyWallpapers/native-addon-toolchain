@@ -1,5 +1,5 @@
 {
-  "runtime": "canvas-v1",
+  "runtime": "canvas-native-v1",
   "name": "Native hook build smoke",
   "description": "Exercises the official Windhawk build and bundle pipeline.",
   "version": "0.0.0",
@@ -18,15 +18,5 @@
       "step": 1
     }
   ],
-  "native": {
-    "hooks": [
-      {
-        "id": "build-smoke",
-        "runtime": "windhawk-v1",
-        "source": "native/hooks/build-smoke.wh.cpp",
-        "surface": "windows-shell-v1"
-      }
-    ]
-  },
   "ui": { "pointerEvents": "none" }
 }

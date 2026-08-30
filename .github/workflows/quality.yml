@@ -226,7 +226,7 @@ jobs:
             if (($indexKeys -join "`n") -cne ($expectedIndexKeys -join "`n")) {
               throw 'Bundle index contains a non-canonical root field'
             }
-            if ($index.schemaVersion -ne 1 -or $index.capabilitySnapshot.runtime -cne 'canvas-v1') {
+            if ($index.schemaVersion -ne 1 -or $index.capabilitySnapshot.runtime -cne 'canvas-native-v1') {
               throw 'Bundle index does not use the canonical contract'
             }
             if (@($index.files).Count -eq 0 -or $null -ne $index.distributionDigest) {
