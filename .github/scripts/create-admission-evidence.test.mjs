@@ -68,7 +68,7 @@ function runnerObservation(replica, workflowSha, imageVersion = '20260719.1') {
       windowsSdk: { availableVersions: ['10.0.26100.0'] },
       windhawk: {
         used: true,
-        windhawkCommit: '4'.repeat(40),
+        windhawkSourceCommit: '4'.repeat(40),
         archiveSha256: `sha256:${'5'.repeat(64)}`,
         clang: {
           sha256: `sha256:${'6'.repeat(64)}`,

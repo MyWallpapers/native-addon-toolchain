@@ -119,7 +119,7 @@ try {
         windowsSdk = [ordered]@{ availableVersions = @('10.0.26100.0') }
         windhawk = [ordered]@{
           used = $false
-          windhawkCommit = ''.PadLeft(40, '4')
+          windhawkSourceCommit = ''.PadLeft(40, '4')
           archiveSha256 = 'sha256:' + ''.PadLeft(64, '5')
           clang = $null
           linker = $null

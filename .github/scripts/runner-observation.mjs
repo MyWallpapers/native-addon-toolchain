@@ -105,11 +105,11 @@ function validateTools(value, label) {
 
   exactKeys(
     value.windhawk,
-    ['used', 'windhawkCommit', 'archiveSha256', 'clang', 'linker'],
+    ['used', 'windhawkSourceCommit', 'archiveSha256', 'clang', 'linker'],
     `${label} Windhawk toolchain`,
   )
   if (typeof value.windhawk.used !== 'boolean') fail(`${label} Windhawk usage flag is invalid.`)
-  cleanLine(value.windhawk.windhawkCommit, `${label} Windhawk commit`, COMMIT_PATTERN)
+  cleanLine(value.windhawk.windhawkSourceCommit, `${label} Windhawk source commit`, COMMIT_PATTERN)
   cleanLine(value.windhawk.archiveSha256, `${label} Windhawk archive digest`, SHA256_PATTERN)
   if (value.windhawk.used) {
     executableObservation(value.windhawk.clang, `${label} Windhawk clang`)
