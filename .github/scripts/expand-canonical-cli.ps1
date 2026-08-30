@@ -103,7 +103,6 @@ foreach ($Required in @(
   'cli/dist/bin.js',
   'cli/dist/windhawk/build-native-hooks.ps1',
   'cli/dist/windhawk/install-windhawk-toolchain.ps1',
-  'cli/dist/windhawk/mywallpaper_windhawk.hpp',
   'cli/dist/windhawk/windhawk-v1.lock.json',
   'cli/node_modules/@mywallpaper/sdk/package.json',
   'cli/node_modules/@mywallpaper/sdk/dist/addon-schema/index.js',
