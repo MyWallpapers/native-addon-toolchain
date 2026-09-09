@@ -5,43 +5,35 @@ on:
     inputs:
       channel:
         description: Hardcoded MyWallpaper publication channel (development or production)
-        required: false
-        default: development
+        required: true
         type: string
       publication_request_id:
         description: Frozen MyWallpaper publication request UUID (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       publication_attempt_id:
         description: Immutable MyWallpaper publication attempt UUID (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       source_repository_id:
         description: Frozen numeric GitHub source repository ID (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       source_repository:
         description: Frozen GitHub source repository owner/name (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       source_commit_sha:
         description: Frozen lowercase source commit SHA (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       source_ref:
         description: Frozen source tag ref, refs/tags/vSemVer (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
       source_version:
         description: Frozen canonical manifest SemVer without the v prefix (central dispatch only)
-        required: false
-        default: ''
+        required: true
         type: string
 
 permissions: {}
@@ -50,19 +42,18 @@ env:
   # Operational capacity of one admission workspace. This is deliberately a
   # reviewed workflow value rather than an author-controlled input.
   ADMISSION_WORKSPACE_BUDGET_BYTES: '4294967296'
-  MYWALLPAPER_PUBLICATION_MODE: ${{ inputs.publication_request_id != '' && 'central' || 'legacy' }}
   MYWALLPAPER_PUBLICATION_REQUEST_ID: ${{ inputs.publication_request_id }}
   MYWALLPAPER_PUBLICATION_ATTEMPT_ID: ${{ inputs.publication_attempt_id }}
-  MYWALLPAPER_SOURCE_REPOSITORY_ID: ${{ inputs.publication_request_id != '' && inputs.source_repository_id || github.repository_id }}
-  MYWALLPAPER_SOURCE_REPOSITORY: ${{ inputs.publication_request_id != '' && inputs.source_repository || github.repository }}
-  MYWALLPAPER_SOURCE_COMMIT_SHA: ${{ inputs.publication_request_id != '' && inputs.source_commit_sha || github.sha }}
-  MYWALLPAPER_SOURCE_REF: ${{ inputs.publication_request_id != '' && inputs.source_ref || github.ref }}
+  MYWALLPAPER_SOURCE_REPOSITORY_ID: ${{ inputs.source_repository_id }}
+  MYWALLPAPER_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+  MYWALLPAPER_SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+  MYWALLPAPER_SOURCE_REF: ${{ inputs.source_ref }}
   MYWALLPAPER_SOURCE_VERSION: ${{ inputs.source_version }}
 
 jobs:
   build-untrusted:
     name: Rebuild untrusted release (${{ matrix.replica }}/2)
-    if: (github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != '')
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''
     # Each replica is a fresh GitHub-hosted VM. Native outputs are uploaded
     # before registry-installed web dependencies are ever executed.
     runs-on: windows-2025
@@ -86,7 +77,6 @@ jobs:
       - name: Validate the complete publication identity
         shell: pwsh
         env:
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ inputs.publication_attempt_id }}
           PUBLICATION_REQUEST_ID: ${{ inputs.publication_request_id }}
           SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
@@ -95,35 +85,20 @@ jobs:
           SOURCE_REPOSITORY_ID: ${{ inputs.source_repository_id }}
           SOURCE_VERSION: ${{ inputs.source_version }}
         run: |
-          $centralValues = @(
-            $env:PUBLICATION_REQUEST_ID,
-            $env:PUBLICATION_ATTEMPT_ID,
-            $env:SOURCE_REPOSITORY_ID,
-            $env:SOURCE_REPOSITORY,
-            $env:SOURCE_COMMIT_SHA,
-            $env:SOURCE_REF,
-            $env:SOURCE_VERSION
-          )
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            if ($env:PUBLICATION_REQUEST_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
-                $env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
-                $env:GITHUB_RUN_ATTEMPT -cne '1' -or
-                $env:SOURCE_REPOSITORY_ID -cnotmatch '^[1-9][0-9]{0,15}$' -or
-                $env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$' -or
-                $env:SOURCE_COMMIT_SHA -cnotmatch '^[0-9a-f]{40}$' -or
-                $env:SOURCE_VERSION -cnotmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
-                $env:SOURCE_REF -cne "refs/tags/v$env:SOURCE_VERSION") {
-              throw 'Central publication inputs are incomplete, non-canonical or mutually inconsistent'
-            }
-          } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
-                    @($centralValues | Where-Object { -not [string]::IsNullOrEmpty($_) }).Count -ne 0) {
-            throw 'Legacy callers cannot partially supply central publication inputs'
+          if ($env:PUBLICATION_REQUEST_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
+              $env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
+              $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:SOURCE_REPOSITORY_ID -cnotmatch '^[1-9][0-9]{0,15}$' -or
+              $env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$' -or
+              $env:SOURCE_COMMIT_SHA -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:SOURCE_VERSION -cnotmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
+              $env:SOURCE_REF -cne "refs/tags/v$env:SOURCE_VERSION") {
+            throw 'Central publication inputs are incomplete, non-canonical or mutually inconsistent'
           }
 
       - name: Materialize the exact trusted toolchain without credentials
         shell: pwsh
         env:
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           DISPATCH_REPOSITORY: ${{ github.repository }}
           DISPATCH_REF: ${{ github.ref }}
           DISPATCH_SHA: ${{ github.sha }}
@@ -138,17 +113,12 @@ jobs:
           if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
           if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
-                $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
-                $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
-                $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact immutable toolchain release commit'
-            }
-          } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
-                    $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
-            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
+              $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
+              $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
+              $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
+              $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
+            throw 'Central publication must execute the exact immutable toolchain release commit'
           }
           $toolchain = Join-Path $env:GITHUB_WORKSPACE 'toolchain'
           if (Test-Path -LiteralPath $toolchain) { throw 'Toolchain destination already exists' }
@@ -321,7 +291,7 @@ jobs:
   verify-package:
     name: Verify and package on a fresh runner
     needs: build-untrusted
-    if: (github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != '')
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -351,7 +321,6 @@ jobs:
       - name: Materialize the exact trusted toolchain without credentials
         shell: pwsh
         env:
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           DISPATCH_REPOSITORY: ${{ github.repository }}
           DISPATCH_REF: ${{ github.ref }}
           DISPATCH_SHA: ${{ github.sha }}
@@ -366,17 +335,12 @@ jobs:
           if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
           if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
-                $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
-                $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
-                $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact immutable toolchain release commit'
-            }
-          } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
-                    $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
-            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
+              $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
+              $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
+              $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
+              $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
+            throw 'Central publication must execute the exact immutable toolchain release commit'
           }
           $toolchain = Join-Path $env:GITHUB_WORKSPACE 'toolchain'
           if (Test-Path -LiteralPath $toolchain) { throw 'Toolchain destination already exists' }
@@ -476,7 +440,6 @@ jobs:
           CALLER_REPOSITORY_ID: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}
           CALLER_REF: ${{ env.MYWALLPAPER_SOURCE_REF }}
           EXPECTED_SOURCE_VERSION: ${{ env.MYWALLPAPER_SOURCE_VERSION }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
         run: |
           $workspaceBudget = 0L
           if (-not [long]::TryParse($env:ADMISSION_WORKSPACE_BUDGET_BYTES, [ref]$workspaceBudget) -or $workspaceBudget -le 0) {
@@ -485,12 +448,11 @@ jobs:
           $fileBudget = [Math]::Max(1L, [long]($workspaceBudget / 4096L))
           if ($env:CALLER_REF -cnotmatch '^refs/tags/v') { throw 'Add-on releases require a v-prefixed Git tag' }
           $sourceTag = $env:CALLER_REF.Substring('refs/tags/'.Length)
-          if ($env:PUBLICATION_MODE -ceq 'central' -and
-              $sourceTag -cne "v$env:EXPECTED_SOURCE_VERSION") {
+          if ($sourceTag -cne "v$env:EXPECTED_SOURCE_VERSION") {
             throw 'Frozen source ref differs from the expected manifest version'
           }
           # The canonical CLI validates Git provenance through GitHub's tag
-          # environment. In central mode the ambient ref belongs to the
+          # environment. The ambient ref belongs to the
           # toolchain authority, so bind that validation to the already-frozen
           # source tag instead of leaking central-publication-v* into it.
           $env:GITHUB_REF_TYPE = 'tag'
@@ -569,11 +531,9 @@ jobs:
             -AdmissionMetadataRoot $metadataRoot
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "metadata-root=$metadataRoot" >> $env:GITHUB_OUTPUT
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $bundleIndex = Get-Content -LiteralPath "$metadataRoot/bundle-index.json" -Raw | ConvertFrom-Json
-            if ([string]$bundleIndex.version -cne $env:EXPECTED_SOURCE_VERSION) {
-              throw 'Frozen source version differs from the verified manifest version'
-            }
+          $bundleIndex = Get-Content -LiteralPath "$metadataRoot/bundle-index.json" -Raw | ConvertFrom-Json
+          if ([string]$bundleIndex.version -cne $env:EXPECTED_SOURCE_VERSION) {
+            throw 'Frozen source version differs from the verified manifest version'
           }
 
       - name: Create admission-v1 subject, provenance and SBOM
@@ -586,7 +546,6 @@ jobs:
           CALLER_REPOSITORY_ID: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}
           EXPECTED_ARCHIVE_SHA256: ${{ steps.package.outputs.archive-sha256 }}
           EXPECTED_DISTRIBUTION_DIGEST: ${{ steps.package.outputs.distribution-digest }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_VERSION: ${{ env.MYWALLPAPER_SOURCE_VERSION }}
@@ -611,10 +570,7 @@ jobs:
           $runnerObservation = Join-Path $env:RUNNER_TEMP 'mywallpaper-runner-observation-v1.json'
           $metadataRoot = Join-Path $env:RUNNER_TEMP 'mywallpaper-admission-metadata'
           $archive = Join-Path $env:RUNNER_TEMP 'mywallpaper-addon-bundle.zip'
-          $resolvedWorkflowRef = $env:WORKFLOW_REF
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $resolvedWorkflowRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-          }
+          $resolvedWorkflowRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
           $evidenceArguments = @(
             'toolchain/.github/scripts/create-admission-evidence.mjs',
             '--repository-root', 'caller',
@@ -639,13 +595,11 @@ jobs:
             '--operational-max-metadata-bytes', $metadataBudget,
             '--output-root', $evidenceRoot
           )
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $evidenceArguments += @(
-              '--publication-request-id', $env:PUBLICATION_REQUEST_ID,
-              '--publication-attempt-id', $env:PUBLICATION_ATTEMPT_ID,
-              '--source-version', $env:SOURCE_VERSION
-            )
-          }
+          $evidenceArguments += @(
+            '--publication-request-id', $env:PUBLICATION_REQUEST_ID,
+            '--publication-attempt-id', $env:PUBLICATION_ATTEMPT_ID,
+            '--source-version', $env:SOURCE_VERSION
+          )
           $summaryJson = node @evidenceArguments
           if ($LASTEXITCODE -ne 0) { throw 'admission-v1 evidence generation failed' }
           $summary = $summaryJson | ConvertFrom-Json
@@ -817,7 +771,7 @@ jobs:
   attest-publish:
     name: Attest, publish and finalize with OIDC
     needs: verify-package
-    if: (github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != '')
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -839,7 +793,6 @@ jobs:
       - name: Materialize the trusted finalizer at the exact workflow SHA
         shell: pwsh
         env:
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           DISPATCH_REPOSITORY: ${{ github.repository }}
           DISPATCH_REF: ${{ github.ref }}
           DISPATCH_SHA: ${{ github.sha }}
@@ -854,17 +807,12 @@ jobs:
           if ($env:WORKFLOW_FILE -cne '.github/workflows/native-addon-build.yml') { throw 'Unexpected reusable-workflow path' }
           if ($env:WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Reusable workflow is not resolved to a full commit SHA' }
           $prefix = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@"
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-                $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
-                $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
-                $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
-                $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
-              throw 'Central publication must execute the exact immutable toolchain release commit'
-            }
-          } elseif ($env:PUBLICATION_MODE -cne 'legacy' -or
-                    $env:WORKFLOW_REF -cne "$prefix$env:WORKFLOW_SHA") {
-            throw 'Caller must pin the reusable workflow by its exact full commit SHA'
+          if ($env:DISPATCH_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
+              $env:DISPATCH_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
+              $env:DISPATCH_SHA -cne $env:WORKFLOW_SHA -or
+              $env:DISPATCH_WORKFLOW_REF -cne "$env:DISPATCH_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:DISPATCH_REF" -or
+              $env:DISPATCH_WORKFLOW_SHA -cne $env:DISPATCH_SHA) {
+            throw 'Central publication must execute the exact immutable toolchain release commit'
           }
           $toolchain = Join-Path $env:GITHUB_WORKSPACE 'toolchain'
           if (Test-Path -LiteralPath $toolchain) { throw 'Toolchain destination already exists' }
@@ -900,45 +848,28 @@ jobs:
         id: publication
         shell: pwsh
         env:
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_CHANNEL: ${{ inputs.channel }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
         run: |
-          $central = $env:PUBLICATION_MODE -ceq 'central'
           switch ($env:PUBLICATION_CHANNEL) {
             'development' {
-              if ($central) {
-                'audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
-                'finalizer-audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
-                "completion-url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-                "finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
-                "url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
-              } else {
-                'audience=mywallpaper-addon-release-development' >> $env:GITHUB_OUTPUT
-                'finalizer-audience=mywallpaper-native-admission-development' >> $env:GITHUB_OUTPUT
-                'finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/releases' >> $env:GITHUB_OUTPUT
-                'url=https://dev.mywallpaper.online/api/internal/addon-release-ingestion' >> $env:GITHUB_OUTPUT
-              }
+              'audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
+              'finalizer-audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
+              "completion-url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
+              "finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
+              "url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
             }
             'production' {
-              if ($central) {
-                'audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
-                'finalizer-audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
-                "completion-url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-                "finalizer-base=https://mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
-                "url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
-              } else {
-                'audience=mywallpaper-addon-release-production' >> $env:GITHUB_OUTPUT
-                'finalizer-audience=mywallpaper-native-admission-production' >> $env:GITHUB_OUTPUT
-                'finalizer-base=https://mywallpaper.online/api/internal/native-admission/releases' >> $env:GITHUB_OUTPUT
-                'url=https://mywallpaper.online/api/internal/addon-release-ingestion' >> $env:GITHUB_OUTPUT
-              }
+              'audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
+              'finalizer-audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
+              "completion-url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
+              "finalizer-base=https://mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
+              "url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
             }
             default { throw 'channel must be development or production' }
           }
 
       - name: Mark the double rebuild as verified
-        if: inputs.publication_request_id != ''
         shell: pwsh
         env:
           AUTHORIZATION_AUDIENCE: ${{ steps.publication.outputs.audience }}
@@ -1038,7 +969,6 @@ jobs:
           ARTIFACT_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
           DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
           EXPECTED_SUBJECT_SHA256: ${{ needs.verify-package.outputs.admission-subject-sha256 }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
@@ -1061,12 +991,8 @@ jobs:
           $subjectDigest = 'sha256:' + (Get-FileHash -LiteralPath $subjectPath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($subjectDigest -cne $env:EXPECTED_SUBJECT_SHA256) { throw 'Admission subject digest changed in transfer' }
           $subject = Get-Content -LiteralPath $subjectPath -Raw | ConvertFrom-Json
-          $resolvedWorkflowRef = $env:WORKFLOW_REF
-          $expectedContract = 'admission-v1'
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $resolvedWorkflowRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-            $expectedContract = 'central-admission-v1'
-          }
+          $resolvedWorkflowRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
+          $expectedContract = 'central-admission-v1'
           if ($subject.schemaVersion -ne 1 -or $subject.contract -cne $expectedContract -or
               $subject.workflow.repository -cne $env:WORKFLOW_REPOSITORY -or
               $subject.workflow.path -cne $env:WORKFLOW_FILE -or
@@ -1081,8 +1007,7 @@ jobs:
               $subject.build.reproducible -ne $true -or @($subject.build.replicas).Count -ne 2) {
             throw 'Admission subject does not bind the current release and workflow'
           }
-          if ($env:PUBLICATION_MODE -ceq 'central' -and
-              ($subject.publication.requestId -cne $env:PUBLICATION_REQUEST_ID -or
+          if (($subject.publication.requestId -cne $env:PUBLICATION_REQUEST_ID -or
                $subject.publication.attemptId -cne $env:PUBLICATION_ATTEMPT_ID -or
                $subject.release.version -cne $env:SOURCE_VERSION)) {
             throw 'Admission subject does not bind the frozen central publication request'
@@ -1149,7 +1074,6 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
@@ -1162,10 +1086,8 @@ jobs:
           $sourceTagName = $env:SOURCE_REF.Substring('refs/tags/'.Length)
           $transportTagName = $sourceTagName
           $transportCommitSha = $env:SOURCE_COMMIT_SHA
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $transportTagName = "publication-$env:PUBLICATION_ATTEMPT_ID"
-            $transportCommitSha = $env:WORKFLOW_SHA
-          }
+          $transportTagName = "publication-$env:PUBLICATION_ATTEMPT_ID"
+          $transportCommitSha = $env:WORKFLOW_SHA
           & toolchain/.github/scripts/prepare-immutable-release.ps1 `
             -Repository "$env:GITHUB_REPOSITORY" `
             -TagName $transportTagName `
@@ -1238,7 +1160,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.github-release.outputs.release-id }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
@@ -1259,7 +1180,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.github-release.outputs.release-id }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
@@ -1276,10 +1196,8 @@ jobs:
           $sourceTagName = $env:SOURCE_REF.Substring('refs/tags/'.Length)
           $transportTagName = $sourceTagName
           $transportCommitSha = $env:SOURCE_COMMIT_SHA
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $transportTagName = "publication-$env:PUBLICATION_ATTEMPT_ID"
-            $transportCommitSha = $env:WORKFLOW_SHA
-          }
+          $transportTagName = "publication-$env:PUBLICATION_ATTEMPT_ID"
+          $transportCommitSha = $env:WORKFLOW_SHA
           & toolchain/.github/scripts/finalize-immutable-release.ps1 `
             -Repository "$env:GITHUB_REPOSITORY" `
             -ReleaseId $env:RELEASE_ID `
@@ -1304,7 +1222,6 @@ jobs:
           PUBLICATION_URL: ${{ steps.publication.outputs.url }}
           DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
           IMMUTABLE_RELEASE: ${{ steps.immutable-release.outputs.release-immutable }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
@@ -1324,15 +1241,10 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($commitSha) -or $commitSha -cnotmatch '\A[0-9a-fA-F]{40}\z') {
             throw 'GITHUB_SHA must be a 40-character hexadecimal commit SHA'
           }
-          $idempotencyKey = if ($env:PUBLICATION_MODE -ceq 'central') {
+          $idempotencyKey = $(
             "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion"
-          } else {
-            "addon-release:$($repositoryId):$($commitSha)"
-          }
-          if (($env:PUBLICATION_MODE -ceq 'central' -and
-               $idempotencyKey -cnotmatch '\Aaddon-publication:[0-9a-f-]{36}:[0-9a-f-]{36}:ingestion\z') -or
-              ($env:PUBLICATION_MODE -ceq 'legacy' -and
-               $idempotencyKey -cnotmatch '\Aaddon-release:[0-9]+:[0-9a-f]{40}\z')) {
+          )
+          if ($idempotencyKey -cnotmatch '\Aaddon-publication:[0-9a-f-]{36}:[0-9a-f-]{36}:ingestion\z') {
             throw 'Add-on release idempotency key construction failed'
           }
           . toolchain/.github/scripts/release-artifact-contract.ps1
@@ -1341,20 +1253,14 @@ jobs:
               [long]$artifact.sizeBytes -ne [long]$env:EXPECTED_BUNDLE_SIZE) {
             throw 'GitHub bundle artifact descriptor differs from the verified logical archive'
           }
-          $request = if ($env:PUBLICATION_MODE -ceq 'central') {
+          $request = $(
             [ordered]@{
               schemaVersion = 1
               publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
               artifact = $artifact
               distributionDigest = $env:DISTRIBUTION_DIGEST
             }
-          } else {
-            [ordered]@{
-              schemaVersion = 1
-              artifact = $artifact
-              distributionDigest = $env:DISTRIBUTION_DIGEST
-            }
-          }
+          )
           $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
             ($request | ConvertTo-Json -Depth 8 -Compress)
           )
@@ -1364,7 +1270,7 @@ jobs:
               'Idempotency-Key' = $idempotencyKey
               'X-Request-ID' = $idempotencyKey
             }
-            $response = if ($env:PUBLICATION_MODE -ceq 'central') {
+            $response = $(
               Invoke-MyWallpaperIdempotentJsonPost `
                 -Uri $env:PUBLICATION_URL `
                 -Headers $publicationHeaders `
@@ -1375,29 +1281,7 @@ jobs:
                 -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
                 -RetryHorizonSec 1500 `
                 -MaxAttempts 320
-            } else {
-              $audience = [uri]::EscapeDataString($env:PUBLICATION_AUDIENCE)
-              $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-              $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
-              if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
-                throw 'GitHub OIDC audience query construction failed'
-              }
-              $tokenResponse = Invoke-RestMethod `
-                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-                -Uri $tokenUri `
-                -MaximumRedirection 0
-              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-                throw 'GitHub OIDC token was not returned'
-              }
-              $publicationHeaders['Authorization'] = "Bearer $($tokenResponse.value)"
-              Invoke-RestMethod `
-                -Method Post `
-                -Uri $env:PUBLICATION_URL `
-                -MaximumRedirection 0 `
-                -Headers $publicationHeaders `
-                -ContentType 'application/json' `
-                -Body $requestBytes
-            }
+            )
           } catch {
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
             throw "MyWallpaper publication rejected the release: $detail"
@@ -1437,7 +1321,7 @@ jobs:
           SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
           SOURCE_REPOSITORY: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY }}
           SUBJECT_PATH: ${{ steps.admission.outputs.subject }}
-          WORKFLOW_REPOSITORY_REF: ${{ inputs.publication_request_id != '' && github.ref || 'refs/heads/admission-v1' }}
+          WORKFLOW_REPOSITORY_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           if ($env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$') {
@@ -1499,15 +1383,13 @@ jobs:
           FINALIZER_AUDIENCE: ${{ steps.publication.outputs.finalizer-audience }}
           FINALIZER_BASE_URL: ${{ steps.publication.outputs.finalizer-base }}
           MATERIALS_ARTIFACT_PATH: ${{ steps.release-assets.outputs.materials-artifact }}
-          PUBLICATION_MODE: ${{ env.MYWALLPAPER_PUBLICATION_MODE }}
           PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
         run: |
           if ($env:ADDON_RELEASE_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
             throw 'Native finalizer release identity is invalid'
           }
-          if ($env:PUBLICATION_MODE -ceq 'central' -and
-              $env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
+          if ($env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
             throw 'Central native finalizer attempt identity is invalid'
           }
           $finalizerUrl = "$($env:FINALIZER_BASE_URL)/$($env:ADDON_RELEASE_ID)/evidence"
@@ -1564,25 +1446,20 @@ jobs:
               pwshVersion = $pwshVersion
             }
           } | ConvertTo-Json -Depth 8 -Compress
-          $requestText = if ($env:PUBLICATION_MODE -ceq 'central') {
+          $requestText = $(
             '{"schemaVersion":1,"publicationAttemptId":' +
               (($env:PUBLICATION_ATTEMPT_ID | ConvertTo-Json -Compress)) +
               ',"evidence":' + $evidenceJson + ',"attempt":' + $attempt +
               ',"materialsArtifact":' + $materialsJson + '}'
-          } else {
-            '{"schemaVersion":1,"evidence":' + $evidenceJson +
-              ',"attempt":' + $attempt + ',"materialsArtifact":' + $materialsJson + '}'
-          }
+          )
           $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestText)
 
           $finalizerHeaders = @{}
-          if ($env:PUBLICATION_MODE -ceq 'central') {
-            $finalizerHeaders['Idempotency-Key'] =
-              "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)"
-          }
+          $finalizerHeaders['Idempotency-Key'] =
+            "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)"
           . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
           try {
-            $result = if ($env:PUBLICATION_MODE -ceq 'central') {
+            $result = $(
               Invoke-MyWallpaperIdempotentJsonPost `
                 -Uri $uri `
                 -Headers $finalizerHeaders `
@@ -1593,29 +1470,7 @@ jobs:
                 -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
                 -RetryHorizonSec 1500 `
                 -MaxAttempts 320
-            } else {
-              $audience = [Uri]::EscapeDataString($env:FINALIZER_AUDIENCE)
-              $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-              $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)$($separator)audience=$audience"
-              if (-not $tokenUri.EndsWith("$($separator)audience=$audience", [StringComparison]::Ordinal)) {
-                throw 'GitHub finalizer OIDC audience query construction failed'
-              }
-              $tokenResponse = Invoke-RestMethod `
-                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-                -Uri $tokenUri `
-                -MaximumRedirection 0
-              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-                throw 'GitHub finalizer OIDC token was not returned'
-              }
-              $finalizerHeaders['Authorization'] = "Bearer $($tokenResponse.value)"
-              Invoke-RestMethod `
-                -Method Post `
-                -Uri $uri `
-                -MaximumRedirection 0 `
-                -Headers $finalizerHeaders `
-                -ContentType 'application/json' `
-                -Body $requestBytes
-            }
+            )
           } catch {
             $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
               $_.Exception.Message

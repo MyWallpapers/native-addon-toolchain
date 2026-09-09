@@ -270,7 +270,7 @@ for (const endpoint of [
   '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion',
   '/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
 ]) requireCount(reusable, endpoint, 2, `development and production ${endpoint}`)
-requireText(publisher, "if: inputs.publication_request_id != ''", 'central-only successful verification callback')
+requireText(publisher, 'Mark the double rebuild as verified', 'successful verification callback')
 requireText(publisher, "outcome = 'succeeded'", 'successful double-rebuild completion')
 requireText(publisher, 'failureClass = $null', 'null success failure class')
 requireText(
@@ -306,7 +306,7 @@ requireCount(
 requireText(publisher, 'publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound central payloads')
 requireText(publisher, 'create-native-build-evidence.mjs', 'fresh NativeBuildEvidence transformation')
 requireText(publisher, 'actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6', 'pinned GitHub/Sigstore attestation')
-requireCount(publisher, '-MaximumRedirection 0', 5, 'direct redirect refusals in legacy publisher and GitHub requests')
+requireCount(publisher, '-MaximumRedirection 0', 1, 'direct GitHub request redirect refusal')
 for (const [fragment, label] of [
   ['[ValidateRange(1, 512)][int]$MaxAttempts = 6', 'bounded callback attempt budget'],
   ['-MaximumRedirection 0', 'callback redirect refusal'],
@@ -359,12 +359,11 @@ requireCount(
 for (const script of [preparer, finalizer]) {
   requireText(script, "$Repository -cne 'MyWallpapers/native-addon-toolchain'", 'toolchain-only central transport')
   requireText(script, '$TagName -cne "publication-$PublicationAttemptId"', 'attempt-namespaced transport tag')
-  requireText(script, '$Repository -cne $SourceRepository', 'unchanged legacy source transport')
   requireText(script, 'Get-TagCommit $SourceRepository $SourceTagName', 'exact source tag verification')
   requireText(script, 'Get-TagCommit $Repository $TagName', 'exact transport tag verification')
   requireText(script, '<!-- mywallpaper-central-admission-v1 -->', 'request/source/toolchain release metadata')
 }
-requireText(finalizer, "make_latest = if ($CentralPublication) { 'false' } else { 'legacy' }", 'non-latest central transport')
+requireText(finalizer, "make_latest = 'false'", 'non-latest central transport')
 requireText(finalizer, '[bool]$Release.immutable', 'immutable GitHub release enforcement')
 requireText(preparer, 'function Ensure-CentralTransportTag', 'explicit central transport tag creation')
 requireText(preparer, '"https://api.github.com/repos/$Repository/git/refs"', 'fixed GitHub transport ref endpoint')
@@ -374,3 +373,18 @@ requireText(nativeEvidence, 'CENTRAL_TOOLCHAIN_REF_PATTERN', 'central toolchain 
 requireText(nativeEvidence, 'repositoryRef: workflowRef', 'truthful workflow ref evidence')
 
 process.stdout.write('central add-on publication workflow contract is intact\n')
+
+for (const fragment of [
+  "github.event_name == 'push'", 'MYWALLPAPER_PUBLICATION_MODE',
+  'PUBLICATION_MODE', 'refs/heads/admission-v1',
+  '/api/internal/addon-release-ingestion', 'mywallpaper-addon-release-development',
+]) {
+  if (reusable.includes(fragment)) fail(`Obsolete caller publication remains: ${fragment}`)
+}
+for (const input of ['channel', 'publication_request_id', 'publication_attempt_id',
+  'source_repository_id', 'source_repository', 'source_commit_sha', 'source_ref', 'source_version']) {
+  const block = reusable.split(`      ${input}:`)[1]?.split(/\n      [a-z_]+:/u)[0]
+  if (!block?.includes('required: true') || block.includes('required: false')) {
+    fail(`Central workflow input must be mandatory: ${input}`)
+  }
+}

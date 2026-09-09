@@ -151,6 +151,9 @@ try {
       --operational-max-files 256 `
       --operational-max-expanded-bytes (32MB) `
       --operational-max-metadata-bytes (16MB) `
+      --publication-request-id 019f0000-0000-7000-8000-000000000099 `
+      --publication-attempt-id 019f0000-0000-7000-8000-000000000100 `
+      --source-version 1.2.3 `
       --output-root $OutputRoot
     if ($LASTEXITCODE -ne 0) { throw 'Admission integration evidence generation failed' }
     return $result

@@ -6,8 +6,8 @@ param(
   [Parameter(Mandatory = $true)][string]$SourceRepository,
   [Parameter(Mandatory = $true)][string]$SourceTagName,
   [Parameter(Mandatory = $true)][string]$SourceCommitSha,
-  [Parameter(Mandatory = $false)][AllowEmptyString()][string]$PublicationRequestId = '',
-  [Parameter(Mandatory = $false)][AllowEmptyString()][string]$PublicationAttemptId = '',
+  [Parameter(Mandatory = $true)][string]$PublicationRequestId,
+  [Parameter(Mandatory = $true)][string]$PublicationAttemptId,
   [Parameter(Mandatory = $true)][string]$BundleManifest,
   [Parameter(Mandatory = $true)][string]$MaterialsManifest
 )
@@ -34,20 +34,11 @@ if ($SourceRepository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{
     $SourceCommitSha -cnotmatch '^[0-9a-f]{40}$') {
   throw 'Immutable source identity is invalid'
 }
-$CentralPublication = -not [string]::IsNullOrEmpty($PublicationRequestId) -or
-  -not [string]::IsNullOrEmpty($PublicationAttemptId)
-if ($CentralPublication) {
-  if ($PublicationRequestId -cnotmatch $PublicationRequestPattern -or
-      $PublicationAttemptId -cnotmatch $PublicationRequestPattern -or
-      $Repository -cne 'MyWallpapers/native-addon-toolchain' -or
-      $TagName -cne "publication-$PublicationAttemptId") {
-    throw 'Central transport identity is invalid'
-  }
-} elseif ($TagName -cnotmatch $SemVerTagPattern -or
-          $Repository -cne $SourceRepository -or
-          $TagName -cne $SourceTagName -or
-          $CommitSha -cne $SourceCommitSha) {
-  throw 'Legacy transport must remain identical to its source release'
+if ($PublicationRequestId -cnotmatch $PublicationRequestPattern -or
+    $PublicationAttemptId -cnotmatch $PublicationRequestPattern -or
+    $Repository -cne 'MyWallpapers/native-addon-toolchain' -or
+    $TagName -cne "publication-$PublicationAttemptId") {
+  throw 'Central transport identity is invalid'
 }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'GITHUB_TOKEN is required' }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) { throw 'GITHUB_OUTPUT is required' }
@@ -59,8 +50,8 @@ if ($ExpectedAssetCount -lt 2 -or $ExpectedAssetCount -gt 1000) {
   throw 'Controlled GitHub release exceeds the external 1000-asset limit'
 }
 
-$ExpectedReleaseName = if ($CentralPublication) { "$SourceRepository@$SourceTagName" } else { $TagName }
-$ExpectedReleaseBody = if ($CentralPublication) {
+$ExpectedReleaseName = $( "$SourceRepository@$SourceTagName" )
+$ExpectedReleaseBody = $(
   [string]::Join("`n", @(
     '<!-- mywallpaper-central-admission-v1 -->',
     "Publication request: $PublicationRequestId",
@@ -72,14 +63,7 @@ $ExpectedReleaseBody = if ($CentralPublication) {
     "Bundle: $($BundleArtifact.sha256)",
     "Materials: $($MaterialsArtifact.sha256)"
   ))
-} else {
-  [string]::Join("`n", @(
-    '<!-- mywallpaper-admission-v1 -->',
-    "Source commit: $CommitSha",
-    "Bundle: $($BundleArtifact.sha256)",
-    "Materials: $($MaterialsArtifact.sha256)"
-  ))
-}
+)
 $ExpectedAssets = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($part in @($BundleArtifact.parts) + @($MaterialsArtifact.parts)) {
   $ExpectedAssets.Add([string]$part.name, [pscustomobject]@{
@@ -128,7 +112,6 @@ function Get-TagCommit([string]$TagRepository, [string]$ExpectedTagName) {
 }
 
 function Ensure-CentralTransportTag() {
-  if (-not $CentralPublication) { return }
   $body = [ordered]@{
     ref = "refs/tags/$TagName"
     sha = $CommitSha
