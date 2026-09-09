@@ -385,55 +385,36 @@ if ((publisher.match(/subject-name: mywallpaper-addon-bundle\.zip/gu) ?? []).len
 if (publisher.includes('subject-attestation') || publisher.includes('materials-attestation')) {
   fail('Admission subject and materials must be submitted to the finalizer, not separately attested.')
 }
-requireText(publisher, 'create-native-build-evidence.mjs', 'NativeBuildEvidenceV1 transformation')
-requireText(publisher, '--workflow-ref $env:WORKFLOW_REPOSITORY_REF', 'explicit workflow repository ref evidence')
-if (nativeEvidenceGenerator.includes("'workflow-run-id'")
-  || nativeEvidenceGenerator.includes("'workflow-run-attempt'")) {
-  fail('Stable NativeBuildEvidenceV1 must not contain workflow attempt identity.')
-}
-requireText(publisher, 'runId = [string]$env:GITHUB_RUN_ID', 'volatile workflow run binding')
-requireText(publisher, 'runAttempt = [string]$env:GITHUB_RUN_ATTEMPT', 'volatile workflow attempt binding')
+requireText(publisher, 'write-publication-result.ps1', 'broker result generation')
+requireText(publisher, '-RunId $env:GITHUB_RUN_ID', 'volatile workflow run binding')
+requireText(publisher, '-RunAttempt $env:GITHUB_RUN_ATTEMPT', 'volatile workflow attempt binding')
 requireText(publisher, 'imageOs = [string]$env:ImageOS', 'publisher image OS observation')
 requireText(publisher, 'imageVersion = [string]$env:ImageVersion', 'publisher image version observation')
 requireText(publisher, 'nodeVersion = $nodeVersion', 'publisher Node.js observation')
 requireText(publisher, 'pwshVersion = $pwshVersion', 'publisher PowerShell observation')
-requireText(publisher, 'mywallpaper-addon-publication-development', 'the development finalizer audience')
-requireText(publisher, 'mywallpaper-addon-publication-production', 'the production finalizer audience')
-requireText(
-  publisher,
-  '/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
-  'the hardcoded native admission finalizer endpoint',
-)
-requireText(
-  publisher,
-  '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion',
-  'the dedicated non-OpenAPI ingestion endpoint',
-)
 requireText(publisher, 'publish-release-assets.ps1', 'content-addressed GitHub Release asset publication')
 requireText(publisher, 'prepare-immutable-release.ps1', 'controlled GitHub draft preparation')
 requireText(publisher, 'finalize-immutable-release.ps1', 'GitHub immutable release publication')
-requireText(publisher, "IMMUTABLE_RELEASE -cne 'true'", 'immutable-release gate before admission OIDC')
-requireText(publisher, 'artifact = $artifact', 'the multipart bundle artifact descriptor')
-requireText(publisher, ',"attempt":', 'the volatile attempt descriptor envelope')
-requireText(publisher, ',"materialsArtifact":', 'the multipart materials artifact descriptor envelope')
+requireText(publisher, "IMMUTABLE_RELEASE -cne 'true'", 'immutable-release gate before broker collection')
+requireText(publisher, '-BundleArtifactPath $env:BUNDLE_ARTIFACT_PATH', 'the multipart bundle descriptor')
+requireText(publisher, '-MaterialsArtifactPath $env:MATERIALS_ARTIFACT_PATH', 'the multipart materials descriptor')
+requireText(publisher, '-SubjectPath $env:SUBJECT_PATH', 'the signed subject')
 if (publisher.includes('MultipartFormDataContent') || publisher.includes("-ContentType 'application/zip'")) {
   fail('Large bundle or materials bytes must never traverse the MyWallpaper HTTP endpoints.')
 }
 const draftIndex = publisher.indexOf('Create or reuse the exact controlled GitHub draft release')
 const attestIndex = publisher.indexOf('uses: actions/attest@')
-const proofIndex = publisher.indexOf('Verify both GitHub/Sigstore proofs before admission OIDC')
+const proofIndex = publisher.indexOf('Verify both GitHub/Sigstore proofs before publishing the result')
 const assetIndex = publisher.indexOf('Publish immutable content-addressed GitHub Release assets')
 const immutableIndex = publisher.indexOf('Publish and cryptographically lock the GitHub Release')
-const ingestionIndex = publisher.indexOf('Publish the immutable release through GitHub OIDC')
-const evidenceIndex = publisher.indexOf('Create NativeBuildEvidenceV1 for the accepted candidate')
-const finalizerIndex = publisher.indexOf('Finalize native admission with a second GitHub OIDC token')
+const resultIndex = publisher.indexOf('Write the bound publication result for broker collection')
+const uploadIndex = publisher.indexOf('Upload the bounded publication result for the GitHub-App broker')
 if (draftIndex < 0 || attestIndex <= draftIndex || proofIndex <= attestIndex || assetIndex <= proofIndex
-  || immutableIndex <= assetIndex || ingestionIndex <= immutableIndex
-  || evidenceIndex <= ingestionIndex || finalizerIndex <= evidenceIndex) {
-  fail('Draft, attestation, immutable publication, ingestion and finalization are out of order.')
+  || immutableIndex <= assetIndex || resultIndex <= immutableIndex || uploadIndex <= resultIndex) {
+  fail('Draft, attestation, immutable publication and broker result are out of order.')
 }
-if (publisher.includes('ACTIONS_ID_TOKEN_REQUEST_TOKEN')) {
-  fail('Publication callbacks must obtain fresh OIDC tokens through the bounded callback helper.')
+for (const obsolete of ['/api/internal/', 'Invoke-MyWallpaperIdempotentJsonPost', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN']) {
+  if (publisher.includes(obsolete)) fail(`Publisher retains an obsolete callback: ${obsolete}`)
 }
 for (const forbiddenHeader of [
   'X-MyWallpaper-Admission-Contract',

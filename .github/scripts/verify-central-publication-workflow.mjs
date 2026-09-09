@@ -57,10 +57,6 @@ const scriptRoot = resolve(dirname(reusablePath), '../scripts')
 const preparer = await readFile(resolve(scriptRoot, 'prepare-immutable-release.ps1'), 'utf8')
 const finalizer = await readFile(resolve(scriptRoot, 'finalize-immutable-release.ps1'), 'utf8')
 const nativeEvidence = await readFile(resolve(scriptRoot, 'create-native-build-evidence.mjs'), 'utf8')
-const idempotentCallback = await readFile(
-  resolve(scriptRoot, 'invoke-mywallpaper-idempotent-json.ps1'),
-  'utf8',
-)
 
 requireText(wrapper, 'name: MyWallpaper central add-on publication', 'the named central entrypoint')
 requireText(wrapper, '  workflow_dispatch:\n', 'the explicit server-dispatched trigger')
@@ -94,47 +90,16 @@ if (wrapper.includes('actions/checkout@')) {
 }
 assertNoExpressionsInShellBodies(wrapper, 'Central wrapper')
 
-const authorize = section(wrapper, '  authorize:', '  release:')
-const release = section(wrapper, '  release:', '  complete:')
-const complete = section(wrapper, '  complete:')
-for (const value of [authorize, complete]) {
-  requireText(value, 'runs-on: ubuntu-24.04', 'GitHub-hosted Ubuntu control-plane execution')
-  requireText(value, 'permissions:\n      id-token: write', 'OIDC-only job permission')
-  if (/\bcontents:\s*write\b/u.test(value) || /\bactions:\s*write\b/u.test(value)) {
-    fail('OIDC control-plane jobs must not receive repository write permissions.')
-  }
-}
-requireText(authorize, "-cne 'github-hosted'", 'the GitHub-hosted runner guard')
-requireText(authorize, "$env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain'", 'the exact toolchain repository guard')
-requireText(authorize, "$env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v", 'the immutable toolchain release ref guard')
-requireText(authorize, '$env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA', 'the exact wrapper workflow SHA guard')
-requireText(authorize, "$env:GITHUB_RUN_ATTEMPT -cne '1'", 'one immutable GitHub run per attempt')
-requireText(authorize, 'sourceRepositoryId = $env:SOURCE_REPOSITORY_ID', 'numeric source identity in the claim')
-requireText(authorize, 'publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID', 'immutable attempt identity in the claim')
-requireText(authorize, 'sourceRepository = $env:SOURCE_REPOSITORY', 'source repository in the claim')
-requireText(authorize, 'sourceRef = $env:SOURCE_REF', 'source tag in the claim')
-requireText(authorize, 'sourceCommitSha = $env:SOURCE_COMMIT_SHA', 'source commit in the claim')
-requireText(authorize, 'sourceVersion = $env:SOURCE_VERSION', 'source version in the claim')
-requireText(authorize, 'channel = $env:PUBLICATION_CHANNEL', 'publication channel in the claim')
-requireText(authorize, '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/claim', 'the fixed claim endpoint')
-requireText(authorize, "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):claim\"", 'attempt-bound claim idempotency')
-requireText(authorize, "$response.state -cne 'building'", 'the strict building response transition')
-requireText(authorize, '$response.PSObject.Properties.Name', 'the exact claim response shape check')
-requireText(authorize, '-TimeoutSec 20', 'a bounded claim request timeout')
-requireText(authorize, '$status -eq 425 -or', 'bounded pre-registration race handling')
-requireText(authorize, '$status -eq 429 -or', 'bounded service-throttling recovery')
-requireText(authorize, '($status -ge 500 -and $status -le 599) -or', 'bounded server-failure recovery')
-requireText(authorize, '$exception -is [System.Threading.Tasks.TaskCanceledException]', 'bounded network-timeout recovery')
-requireText(authorize, '$retryable -and $claimAttempt -lt 5', 'bounded transient claim retries')
-requireText(authorize, '$httpResponse.Headers.RetryAfter', 'server-directed retry delay support')
-requireText(authorize, '[Math]::Min(', 'bounded Retry-After delay')
-requireText(authorize, 'Start-Sleep -Seconds $delaySeconds', 'bounded claim backoff')
-const claimLoop = section(authorize, 'for ($claimAttempt = 0;', 'if ($null -eq $response)')
-requireText(claimLoop, '$tokenResponse = Invoke-RestMethod', 'fresh claim OIDC token per attempt')
-requireText(claimLoop, '$status -eq 408 -or', 'claim request-timeout retry')
-requireText(claimLoop, '$status -eq 0 -and $transportFailure', 'claim transport-only retry')
-
-requireText(release, 'needs: authorize', 'authorization before untrusted builds')
+const validation = section(wrapper, '  validate:', '  release:')
+const release = section(wrapper, '  release:')
+requireText(validation, 'permissions: {}', 'credential-free dispatch validation')
+requireText(validation, "-cne 'github-hosted'", 'the GitHub-hosted runner guard')
+requireText(validation, "$env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain'", 'the exact toolchain repository guard')
+requireText(validation, "$env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v", 'the immutable toolchain release ref guard')
+requireText(validation, '$env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA', 'the exact wrapper workflow SHA guard')
+requireText(validation, "$env:GITHUB_RUN_ATTEMPT -cne '1'", 'one immutable GitHub run per attempt')
+requireText(validation, '$env:SOURCE_REF -cne "refs/tags/v$env:SOURCE_VERSION"', 'frozen source tag/version binding')
+requireText(release, 'needs: validate', 'identity validation before untrusted builds')
 requireText(release, 'uses: ./.github/workflows/native-addon-build.yml', 'the local reviewed reusable workflow')
 for (const input of [
   'publication_request_id',
@@ -147,45 +112,6 @@ for (const input of [
   'channel',
 ]) requireText(release, `${input}: \${{ inputs.${input} }}`, `forwarded ${input}`)
 requireCount(wrapper, 'uses: ./.github/workflows/native-addon-build.yml', 1, 'local reusable-workflow invocation')
-
-requireText(
-  complete,
-  "if: always() && needs.release.result != 'success'",
-  'a failure callback even when the initial claim could not complete',
-)
-requireText(complete, 'AUTHORIZE_RESULT: ${{ needs.authorize.result }}', 'the claim result in the failure callback')
-requireText(complete, "outcome = 'failed'", 'the terminal failure outcome')
-requireText(complete, "failureClass = 'retryable'", 'the conservative retryable failure class')
-requireText(complete, "-cne 'github-hosted'", 'the failure callback GitHub-hosted guard')
-requireText(complete, '$env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA', 'the failure callback workflow SHA guard')
-requireText(complete, "$env:GITHUB_RUN_ATTEMPT -cne '1'", 'failure callback immutable run guard')
-requireText(complete, "'publication-claim-failed'", 'the distinct failed-claim error code')
-requireText(complete, 'errorCode = $errorCode', 'the bounded failure code')
-requireText(complete, '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete', 'the fixed completion endpoint')
-requireText(
-  complete,
-  "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:failed\"",
-  'failure-outcome-specific completion idempotency',
-)
-requireText(complete, '$retryable -and $completionAttempt -lt 5', 'bounded failure callback retries')
-requireText(complete, '$httpResponse.Headers.RetryAfter', 'failure callback Retry-After support')
-requireText(complete, '-TimeoutSec 20', 'a bounded failure callback timeout')
-requireText(complete, "$response.state -cne 'failed'", 'the strict failed response transition')
-requireText(complete, '$response.PSObject.Properties.Name', 'the exact failure response shape check')
-const completionLoop = section(
-  complete,
-  'for ($completionAttempt = 0;',
-  'if ($null -eq $response)',
-)
-requireText(completionLoop, '$tokenResponse = Invoke-RestMethod', 'fresh completion OIDC token per attempt')
-requireText(completionLoop, '$status -eq 408 -or', 'completion request-timeout retry')
-requireText(completionLoop, '$status -eq 0 -and $transportFailure', 'completion transport-only retry')
-
-for (const audience of [
-  'mywallpaper-addon-publication-development',
-  'mywallpaper-addon-publication-production',
-]) requireText(wrapper, audience, `${audience} OIDC audience`)
-requireCount(wrapper, '-MaximumRedirection 0', 4, 'redirect refusals in OIDC and MyWallpaper requests')
 
 for (const input of [
   'publication_request_id',
@@ -265,96 +191,23 @@ requireText(reusable, "$expectedContract = 'central-admission-v1'", 'central evi
 requireText(reusable, '$subject.publication.requestId -cne $env:PUBLICATION_REQUEST_ID', 'request-bound admission evidence')
 requireText(reusable, '$subject.publication.attemptId -cne $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound admission evidence')
 
-for (const endpoint of [
-  '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete',
-  '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion',
-  '/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
-]) requireCount(reusable, endpoint, 2, `development and production ${endpoint}`)
-requireText(publisher, 'Mark the double rebuild as verified', 'successful verification callback')
-requireText(publisher, "outcome = 'succeeded'", 'successful double-rebuild completion')
-requireText(publisher, 'failureClass = $null', 'null success failure class')
-requireText(
-  publisher,
-  "'Idempotency-Key' = \"addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:verified\"",
-  'verified-outcome-specific completion idempotency',
-)
-requireText(publisher, "$response.state -cne 'verifying'", 'strict verifying response transition')
-requireText(publisher, '$response.PSObject.Properties.Name', 'exact verifying response shape check')
 requireText(publisher, '"publication-$env:PUBLICATION_ATTEMPT_ID"', 'attempt-namespaced transport tag')
 requireText(publisher, '-PublicationRequestId $env:PUBLICATION_REQUEST_ID', 'request-bound immutable release')
 requireText(publisher, '-PublicationAttemptId $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound immutable release')
-requireText(publisher, 'addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion', 'attempt-bound ingestion idempotency')
-requireText(publisher, 'addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)', 'attempt-bound evidence idempotency')
+requireText(publisher, 'write-publication-result.ps1', 'the broker result producer')
+requireText(publisher, 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', 'the pinned result upload')
+for (const workflow of [wrapper, reusable]) {
+  for (const obsolete of ['/api/internal/', 'Invoke-MyWallpaperIdempotentJsonPost', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN']) {
+    if (workflow.includes(obsolete)) fail(`Publication must use broker collection, found ${obsolete}`)
+  }
+}
 
 for (const workflow of [wrapper, reusable]) {
   if (/\$env:[A-Za-z_][A-Za-z0-9_]*:/u.test(workflow)) {
     fail('PowerShell variables immediately followed by a colon must use an explicit subexpression.')
   }
 }
-requireCount(
-  publisher,
-  '. toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1',
-  3,
-  'shared idempotent callback imports',
-)
-requireCount(
-  publisher,
-  'Invoke-MyWallpaperIdempotentJsonPost',
-  3,
-  'bounded idempotent callback invocations',
-)
-requireText(publisher, 'publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound central payloads')
-requireText(publisher, 'create-native-build-evidence.mjs', 'fresh NativeBuildEvidence transformation')
 requireText(publisher, 'actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6', 'pinned GitHub/Sigstore attestation')
-requireCount(publisher, '-MaximumRedirection 0', 1, 'direct GitHub request redirect refusal')
-for (const [fragment, label] of [
-  ['[ValidateRange(1, 512)][int]$MaxAttempts = 6', 'bounded callback attempt budget'],
-  ['-MaximumRedirection 0', 'callback redirect refusal'],
-  ['[ValidateRange(1, 120)][int]$TimeoutSec = 20', 'short per-request callback timeout'],
-  ['[ValidateRange(1, 3600)][int]$RetryHorizonSec = 120', 'bounded async polling horizon'],
-  ['-TimeoutSec $TimeoutSec', 'callback request timeout'],
-  ['-Method Get', 'fresh GitHub OIDC token request'],
-  ["$Headers.ContainsKey('Authorization')", 'caller bearer-token rejection'],
-  ["$requestHeaders['Authorization']", 'per-request fresh OIDC token injection'],
-  ['$status -ne 202', 'durable pending-operation polling'],
-  ['$PendingStates', 'strict pending-state allowlist'],
-  ['$PendingPublicationRequestId', 'pending publication-request correlation'],
-  ["@('publicationRequestId', 'state')", 'exact pending response shape'],
-  ['$status -eq 408', 'request-timeout transient retry'],
-  ['$status -eq 425', 'early-data transient retry'],
-  ['$status -eq 429', 'rate-limit transient retry'],
-  ['$status -ge 500 -and $status -le 599', 'server transient retry'],
-  ['$status -eq 0 -and $transportFailure', 'transport-only transient retry'],
-  ["$Headers['Idempotency-Key']", 'stable idempotency-key requirement'],
-  ['function Get-MyWallpaperRetryAfterSeconds', 'one bounded Retry-After parser'],
-  ["$Headers.PSObject.Properties['RetryAfter']", 'typed .NET Retry-After support'],
-  ['$Headers.GetEnumerator()', 'dictionary Retry-After support'],
-  ['[Math]::Min(', 'bounded Retry-After handling'],
-]) requireText(idempotentCallback, fragment, label)
-requireCount(
-  publisher,
-  '-RetryHorizonSec 1500',
-  2,
-  'bounded durable ingestion and native-evidence polling horizons',
-)
-requireCount(
-  publisher,
-  '-PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID',
-  2,
-  'pending callbacks correlated to the frozen publication request',
-)
-requireCount(
-  publisher,
-  "-PendingStates @('queued', 'processing')",
-  2,
-  'strict queued and processing response polling',
-)
-requireCount(
-  publisher,
-  '-MaxAttempts 320',
-  2,
-  'bounded durable polling attempt budgets',
-)
 
 for (const script of [preparer, finalizer]) {
   requireText(script, "$Repository -cne 'MyWallpapers/native-addon-toolchain'", 'toolchain-only central transport')

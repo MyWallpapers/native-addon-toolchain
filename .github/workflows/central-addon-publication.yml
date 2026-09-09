@@ -46,53 +46,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  authorize:
-    name: Claim the frozen publication request
+  validate:
+    name: Validate the frozen publication identity
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions:
-      id-token: write
+    permissions: {}
     steps:
-      - name: Verify GitHub-hosted control-plane boundary
+      - name: Validate the immutable dispatch before building
         shell: pwsh
         env:
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
-        run: |
-          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
-            throw 'Central publication authorization requires a GitHub-hosted runner'
-          }
-
-      - name: Resolve the fixed authorization endpoint
-        id: endpoint
-        shell: pwsh
-        env:
-          PUBLICATION_CHANNEL: ${{ inputs.channel }}
-          PUBLICATION_ATTEMPT_ID: ${{ inputs.publication_attempt_id }}
-          PUBLICATION_REQUEST_ID: ${{ inputs.publication_request_id }}
-        run: |
-          if ($env:PUBLICATION_REQUEST_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'publication_request_id must be a canonical UUID'
-          }
-          if ($env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'publication_attempt_id must be a canonical UUID'
-          }
-          switch ($env:PUBLICATION_CHANNEL) {
-            'development' {
-              'audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
-              "url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/claim" >> $env:GITHUB_OUTPUT
-            }
-            'production' {
-              'audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
-              "url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/claim" >> $env:GITHUB_OUTPUT
-            }
-            default { throw 'channel must be development or production' }
-          }
-
-      - name: Atomically claim this exact GitHub run through OIDC
-        shell: pwsh
-        env:
-          AUTHORIZATION_AUDIENCE: ${{ steps.endpoint.outputs.audience }}
-          AUTHORIZATION_URL: ${{ steps.endpoint.outputs.url }}
           PUBLICATION_CHANNEL: ${{ inputs.channel }}
           PUBLICATION_ATTEMPT_ID: ${{ inputs.publication_attempt_id }}
           PUBLICATION_REQUEST_ID: ${{ inputs.publication_request_id }}
@@ -102,6 +65,9 @@ jobs:
           SOURCE_REPOSITORY_ID: ${{ inputs.source_repository_id }}
           SOURCE_VERSION: ${{ inputs.source_version }}
         run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+            throw 'Central publication requires a GitHub-hosted runner'
+          }
           if ($env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
               $env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
               $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or
@@ -118,108 +84,20 @@ jobs:
               $env:SOURCE_REF -cne "refs/tags/v$env:SOURCE_VERSION") {
             throw 'Frozen publication source identity is invalid or inconsistent'
           }
-          $audience = [Uri]::EscapeDataString($env:AUTHORIZATION_AUDIENCE)
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $request = [ordered]@{
-            schemaVersion = 1
-            publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
-            sourceRepositoryId = $env:SOURCE_REPOSITORY_ID
-            sourceRepository = $env:SOURCE_REPOSITORY
-            sourceRef = $env:SOURCE_REF
-            sourceCommitSha = $env:SOURCE_COMMIT_SHA
-            sourceVersion = $env:SOURCE_VERSION
-            channel = $env:PUBLICATION_CHANNEL
-          }
-          $response = $null
-          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
-            ($request | ConvertTo-Json -Depth 8 -Compress)
-          )
-          for ($claimAttempt = 0; $claimAttempt -lt 6; $claimAttempt++) {
-            try {
-              $tokenResponse = Invoke-RestMethod `
-                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-                -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$audience" `
-                -MaximumRedirection 0 `
-                -TimeoutSec 20
-              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-                throw 'GitHub did not issue the central publication OIDC token'
-              }
-              $response = Invoke-RestMethod `
-                -Method Post `
-                -Uri $env:AUTHORIZATION_URL `
-                -MaximumRedirection 0 `
-                -TimeoutSec 20 `
-                -Headers @{
-                  Authorization = "Bearer $($tokenResponse.value)"
-                  'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):claim"
-                } `
-                -ContentType 'application/json' `
-                -Body $requestBytes
-              break
-            } catch {
-              $status = 0
-              $httpResponse = $_.Exception.Response
-              if ($null -ne $httpResponse -and $null -ne $httpResponse.StatusCode) {
-                $status = [int]$httpResponse.StatusCode
-              }
-              $transportFailure = $false
-              $exception = $_.Exception
-              while ($null -ne $exception) {
-                if ($exception -is [TimeoutException] -or
-                    $exception -is [System.Threading.Tasks.TaskCanceledException] -or
-                    $exception.GetType().FullName -ceq 'System.Net.Http.HttpRequestException' -or
-                    $exception -is [System.Net.WebException] -or
-                    $exception -is [System.IO.IOException] -or
-                    $exception -is [System.Net.Sockets.SocketException]) {
-                  $transportFailure = $true
-                  break
-                }
-                $exception = $exception.InnerException
-              }
-              $retryable = $status -eq 408 -or
-                $status -eq 425 -or
-                $status -eq 429 -or
-                ($status -ge 500 -and $status -le 599) -or
-                ($status -eq 0 -and $transportFailure)
-              if ($retryable -and $claimAttempt -lt 5) {
-                $delaySeconds = [int][Math]::Pow(2, $claimAttempt)
-                if ($null -ne $httpResponse -and $null -ne $httpResponse.Headers.RetryAfter) {
-                  $retryAfter = $httpResponse.Headers.RetryAfter
-                  $retryAfterSeconds = if ($null -ne $retryAfter.Delta) {
-                    [Math]::Ceiling($retryAfter.Delta.TotalSeconds)
-                  } elseif ($null -ne $retryAfter.Date) {
-                    [Math]::Ceiling(($retryAfter.Date - [DateTimeOffset]::UtcNow).TotalSeconds)
-                  } else { $null }
-                  if ($null -ne $retryAfterSeconds) {
-                    $delaySeconds = [int][Math]::Min(
-                      16,
-                      [Math]::Max(1, $retryAfterSeconds)
-                    )
-                  }
-                }
-                Start-Sleep -Seconds $delaySeconds
-                continue
-              }
-              $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
-                $_.Exception.Message
-              } else { $_.ErrorDetails.Message }
-              throw "MyWallpaper refused this publication run: $detail"
+          foreach ($identity in @($env:PUBLICATION_REQUEST_ID, $env:PUBLICATION_ATTEMPT_ID)) {
+            if ($identity -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
+              throw 'Publication request and attempt must be canonical UUIDs'
             }
           }
-          if ($null -eq $response) {
-            throw 'MyWallpaper did not bind the pre-registered GitHub run in time'
+          if ($env:PUBLICATION_CHANNEL -cnotin @('development', 'production')) {
+            throw 'channel must be development or production'
           }
-          $responseKeys = @($response.PSObject.Properties.Name | Sort-Object)
-          $expectedResponseKeys = @('publicationRequestId', 'state') | Sort-Object
-          if (($responseKeys -join "`n") -cne ($expectedResponseKeys -join "`n") -or
-              [string]$response.publicationRequestId -cne $env:PUBLICATION_REQUEST_ID -or
-              [string]$response.state -cne 'building') {
-            throw 'Publication claim response differs from the frozen request and run'
-          }
+          # The GitHub-App broker observes this exact run and collects its
+          # result. The workflow does not call or authorize backend transitions.
 
   release:
-    name: Rebuild, verify, attest and publish
-    needs: authorize
+    name: Rebuild, verify and produce the publication result
+    needs: validate
     permissions:
       actions: read
       artifact-metadata: write
@@ -236,142 +114,3 @@ jobs:
       source_ref: ${{ inputs.source_ref }}
       source_version: ${{ inputs.source_version }}
       channel: ${{ inputs.channel }}
-
-  complete:
-    name: Report a failed publication run
-    needs: [authorize, release]
-    if: always() && needs.release.result != 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      id-token: write
-    steps:
-      - name: Report the terminal run result through OIDC
-        shell: pwsh
-        env:
-          PUBLICATION_CHANNEL: ${{ inputs.channel }}
-          PUBLICATION_ATTEMPT_ID: ${{ inputs.publication_attempt_id }}
-          PUBLICATION_REQUEST_ID: ${{ inputs.publication_request_id }}
-          AUTHORIZE_RESULT: ${{ needs.authorize.result }}
-          RELEASE_RESULT: ${{ needs.release.result }}
-          RUNNER_ENVIRONMENT: ${{ runner.environment }}
-        run: |
-          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
-              $env:GITHUB_REPOSITORY -cne 'MyWallpapers/native-addon-toolchain' -or
-              $env:GITHUB_REF -cnotmatch '^refs/tags/central-publication-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or
-              $env:GITHUB_WORKFLOW_REF -cne "$env:GITHUB_REPOSITORY/.github/workflows/central-addon-publication.yml@$env:GITHUB_REF" -or
-              $env:GITHUB_WORKFLOW_SHA -cne $env:GITHUB_SHA -or
-              $env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
-              $env:GITHUB_RUN_ATTEMPT -cne '1') {
-            throw 'Central publication completion requires the exact immutable GitHub-hosted toolchain release'
-          }
-          if ($env:PUBLICATION_REQUEST_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
-              $env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'Central publication completion identity is invalid'
-          }
-          $origin = switch ($env:PUBLICATION_CHANNEL) {
-            'development' { 'https://dev.mywallpaper.online' }
-            'production' { 'https://mywallpaper.online' }
-            default { throw 'channel must be development or production' }
-          }
-          $audience = "mywallpaper-addon-publication-$env:PUBLICATION_CHANNEL"
-          $escapedAudience = [Uri]::EscapeDataString($audience)
-          $separator = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL.Contains('?')) { '&' } else { '?' }
-          $errorCode = if ($env:AUTHORIZE_RESULT -cne 'success') {
-            'publication-claim-failed'
-          } elseif ($env:RELEASE_RESULT -ceq 'cancelled') {
-            'publication-workflow-cancelled'
-          } else { 'publication-workflow-failed' }
-          $request = [ordered]@{
-            schemaVersion = 1
-            publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
-            outcome = 'failed'
-            failureClass = 'retryable'
-            errorCode = $errorCode
-          }
-          $response = $null
-          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
-            ($request | ConvertTo-Json -Depth 4 -Compress)
-          )
-          for ($completionAttempt = 0; $completionAttempt -lt 6; $completionAttempt++) {
-            try {
-              $tokenResponse = Invoke-RestMethod `
-                -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } `
-                -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL$($separator)audience=$escapedAudience" `
-                -MaximumRedirection 0 `
-                -TimeoutSec 20
-              if ([string]::IsNullOrWhiteSpace($tokenResponse.value)) {
-                throw 'GitHub did not issue the completion OIDC token'
-              }
-              $response = Invoke-RestMethod `
-                -Method Post `
-                -Uri "$origin/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" `
-                -MaximumRedirection 0 `
-                -TimeoutSec 20 `
-                -Headers @{
-                  Authorization = "Bearer $($tokenResponse.value)"
-                  'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:failed"
-                } `
-                -ContentType 'application/json' `
-                -Body $requestBytes
-              break
-            } catch {
-              $status = 0
-              $httpResponse = $_.Exception.Response
-              if ($null -ne $httpResponse -and $null -ne $httpResponse.StatusCode) {
-                $status = [int]$httpResponse.StatusCode
-              }
-              $transportFailure = $false
-              $exception = $_.Exception
-              while ($null -ne $exception) {
-                if ($exception -is [TimeoutException] -or
-                    $exception -is [System.Threading.Tasks.TaskCanceledException] -or
-                    $exception.GetType().FullName -ceq 'System.Net.Http.HttpRequestException' -or
-                    $exception -is [System.Net.WebException] -or
-                    $exception -is [System.IO.IOException] -or
-                    $exception -is [System.Net.Sockets.SocketException]) {
-                  $transportFailure = $true
-                  break
-                }
-                $exception = $exception.InnerException
-              }
-              $retryable = $status -eq 408 -or
-                $status -eq 425 -or
-                $status -eq 429 -or
-                ($status -ge 500 -and $status -le 599) -or
-                ($status -eq 0 -and $transportFailure)
-              if ($retryable -and $completionAttempt -lt 5) {
-                $delaySeconds = [int][Math]::Pow(2, $completionAttempt)
-                if ($null -ne $httpResponse -and $null -ne $httpResponse.Headers.RetryAfter) {
-                  $retryAfter = $httpResponse.Headers.RetryAfter
-                  $retryAfterSeconds = if ($null -ne $retryAfter.Delta) {
-                    [Math]::Ceiling($retryAfter.Delta.TotalSeconds)
-                  } elseif ($null -ne $retryAfter.Date) {
-                    [Math]::Ceiling(($retryAfter.Date - [DateTimeOffset]::UtcNow).TotalSeconds)
-                  } else { $null }
-                  if ($null -ne $retryAfterSeconds) {
-                    $delaySeconds = [int][Math]::Min(
-                      16,
-                      [Math]::Max(1, $retryAfterSeconds)
-                    )
-                  }
-                }
-                Start-Sleep -Seconds $delaySeconds
-                continue
-              }
-              $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
-                $_.Exception.Message
-              } else { $_.ErrorDetails.Message }
-              throw "MyWallpaper refused the publication failure callback: $detail"
-            }
-          }
-          if ($null -eq $response) {
-            throw 'MyWallpaper did not accept the publication failure callback in time'
-          }
-          $responseKeys = @($response.PSObject.Properties.Name | Sort-Object)
-          $expectedResponseKeys = @('publicationRequestId', 'state') | Sort-Object
-          if (($responseKeys -join "`n") -cne ($expectedResponseKeys -join "`n") -or
-              [string]$response.publicationRequestId -cne $env:PUBLICATION_REQUEST_ID -or
-              [string]$response.state -cne 'failed') {
-            throw 'Publication failure response did not enter the failed state'
-          }
