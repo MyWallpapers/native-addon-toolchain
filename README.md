@@ -68,7 +68,7 @@ Operational workspace and GitHub transport limits are not product entitlements.
    and `promotion-eligible` checks on that exact main-branch commit.
 2. Create the immutable `central-publication-v<version>` tag at that commit.
 3. Register that exact tag, workflow SHA and reviewed environment digest in the
-   backend publication authority, preserving the history of earlier authorities.
+   backend publication authority.
 4. Verify the deployed authority before requesting a publication through MyWallpaper.
 
 Central dispatch executes the registered immutable tag, not a moving main-branch

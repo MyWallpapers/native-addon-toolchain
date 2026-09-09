@@ -159,7 +159,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
 
     const publicationRequestId = '019f0000-0000-7000-8000-000000000099'
     const publicationAttemptId = '019f0000-0000-7000-8000-000000000100'
-    const argumentsFor = (outputRoot, reproductionRoot = reproduction, central = false) => [
+    const argumentsFor = (outputRoot, reproductionRoot = reproduction) => [
       script,
       '--repository-root', source,
       '--primary-root', primary,
@@ -182,11 +182,11 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--operational-max-expanded-bytes', String(32 * 1024 * 1024),
       '--operational-max-metadata-bytes', String(16 * 1024 * 1024),
       '--output-root', outputRoot,
-      ...(central ? [
+      ...[
         '--publication-request-id', publicationRequestId,
         '--publication-attempt-id', publicationAttemptId,
         '--source-version', '1.2.3',
-      ] : []),
+      ],
     ]
     const outputRoot = join(temporary, 'evidence')
     const result = spawnSync(process.execPath, argumentsFor(outputRoot), { encoding: 'utf8' })
@@ -195,7 +195,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     const subjectBytes = await readFile(summary.subjectPath)
     const subject = JSON.parse(subjectBytes)
     assert.equal(summary.subjectDigest, digest(subjectBytes))
-    assert.equal(subject.contract, 'admission-v1')
+    assert.equal(subject.contract, 'central-admission-v1')
     assert.equal(subject.workflow.workflowSha, workflowSha)
     assert.equal(subject.source.commitSha, commitSha)
     assert.equal(subject.build.reproducible, true)
@@ -220,40 +220,16 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       (dependency) => dependency.uri === 'mywallpaper:native-companion-build-config',
     ))
 
-    const centralRoot = join(temporary, 'central-evidence')
-    const centralResult = spawnSync(
-      process.execPath,
-      argumentsFor(centralRoot, reproduction, true),
-      { encoding: 'utf8' },
-    )
-    assert.equal(centralResult.status, 0, centralResult.stderr)
-    const centralSummary = JSON.parse(centralResult.stdout)
-    const centralSubject = JSON.parse(await readFile(centralSummary.subjectPath, 'utf8'))
-    assert.equal(centralSubject.contract, 'central-admission-v1')
-    assert.deepEqual(centralSubject.publication, {
+    assert.deepEqual(subject.publication, {
       requestId: publicationRequestId,
       attemptId: publicationAttemptId,
     })
-    assert.equal(centralSubject.release.version, '1.2.3')
-    const centralProvenance = JSON.parse(
-      await readFile(join(centralRoot, 'provenance.intoto.json'), 'utf8'),
-    )
-    assert.equal(
-      centralProvenance.predicate.buildDefinition.externalParameters.publicationRequestId,
-      publicationRequestId,
-    )
-    assert.equal(
-      centralProvenance.predicate.buildDefinition.externalParameters.publicationAttemptId,
-      publicationAttemptId,
-    )
-    assert.equal(
-      centralProvenance.predicate.buildDefinition.externalParameters.sourceVersion,
-      '1.2.3',
-    )
+    assert.equal(provenance.predicate.buildDefinition.externalParameters.publicationRequestId, publicationRequestId)
+    assert.equal(provenance.predicate.buildDefinition.externalParameters.publicationAttemptId, publicationAttemptId)
+    assert.equal(provenance.predicate.buildDefinition.externalParameters.sourceVersion, '1.2.3')
     const incompleteCentralArguments = argumentsFor(
       join(temporary, 'incomplete-central-evidence'),
       reproduction,
-      true,
     )
     const attemptArgumentIndex = incompleteCentralArguments.indexOf('--publication-attempt-id')
     incompleteCentralArguments.splice(attemptArgumentIndex, 2)
@@ -263,7 +239,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       { encoding: 'utf8' },
     )
     assert.notEqual(incompleteCentralResult.status, 0)
-    assert.match(incompleteCentralResult.stderr, /attempt ID and source version must be supplied together/u)
+    assert.match(incompleteCentralResult.stderr, /options are incomplete/u)
 
     for (const replica of [1, 2]) {
       await writeFile(
@@ -301,7 +277,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--native-manifest-digest', digest(Buffer.from('native-manifest', 'utf8')),
       '--materials-digest', digest(await readFile(materialsPath)),
       '--materials-size', String((await readFile(materialsPath)).length),
-      '--workflow-ref', 'refs/heads/admission-v1',
+      '--workflow-ref', 'refs/tags/central-publication-v1.0.0',
       '--workflow-sha', workflowSha,
       '--output', nativeEvidencePath,
     ], { encoding: 'utf8' })
@@ -313,31 +289,15 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     assert.equal(nativeEvidence.release.addonReleaseId, '019f0000-0000-7000-8000-000000000001')
     assert.equal(nativeEvidence.repository.licenseSpdx, 'MIT')
     assert.equal(nativeEvidence.workflow.repository, 'MyWallpapers/native-addon-toolchain')
-    assert.equal(nativeEvidence.workflow.repositoryRef, 'refs/heads/admission-v1')
+    assert.equal(nativeEvidence.workflow.repositoryRef, 'refs/tags/central-publication-v1.0.0')
     assert.equal(nativeEvidence.workflow.workflowSha, workflowSha)
     assert.deepEqual(Object.keys(nativeEvidence.workflow).sort(), [
       'repository', 'repositoryRef', 'workflowSha',
     ])
     assert.equal(nativeEvidence.artifacts.materialsDigest, digest(await readFile(materialsPath)))
 
-    const centralNativeEvidencePath = join(temporary, 'central-native-build-evidence.json')
-    const centralNativeEvidenceResult = spawnSync(process.execPath, [
-      nativeEvidenceScript,
-      '--subject', centralSummary.subjectPath,
-      '--addon-release-id', '019f0000-0000-7000-8000-000000000002',
-      '--license-spdx', 'MIT',
-      '--native-manifest-digest', digest(Buffer.from('central-native-manifest', 'utf8')),
-      '--materials-digest', digest(await readFile(materialsPath)),
-      '--materials-size', String((await readFile(materialsPath)).length),
-      '--workflow-ref', 'refs/tags/central-publication-v1.0.0',
-      '--workflow-sha', workflowSha,
-      '--output', centralNativeEvidencePath,
-    ], { encoding: 'utf8' })
-    assert.equal(centralNativeEvidenceResult.status, 0, centralNativeEvidenceResult.stderr)
-    const centralNativeEvidence = JSON.parse(await readFile(centralNativeEvidencePath, 'utf8'))
-    assert.equal(centralNativeEvidence.checklistVersion, 'central-native-build-integrity-v1')
-    assert.equal(centralNativeEvidence.workflow.repositoryRef, 'refs/tags/central-publication-v1.0.0')
-    assert.deepEqual(centralNativeEvidence.publication, {
+    assert.equal(nativeEvidence.checklistVersion, 'central-native-build-integrity-v1')
+    assert.deepEqual(nativeEvidence.publication, {
       requestId: publicationRequestId,
       attemptId: publicationAttemptId,
       sourceRef: 'refs/tags/v1.2.3',
@@ -356,7 +316,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
       '--native-manifest-digest', digest(Buffer.from('native-manifest', 'utf8')),
       '--materials-digest', digest(await readFile(materialsPath)),
       '--materials-size', String((await readFile(materialsPath)).length),
-      '--workflow-ref', 'refs/heads/admission-v1',
+      '--workflow-ref', 'refs/tags/central-publication-v1.0.0',
       '--workflow-sha', workflowSha,
       '--output', join(temporary, 'rejected-native-build-evidence.json'),
     ], { encoding: 'utf8' })

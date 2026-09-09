@@ -73,10 +73,10 @@ const safeFiles = await readFile(
   resolve(dirname(path), '../scripts/safe-files.mjs'),
   'utf8',
 )
-const pushTagGuard = "github.event_name == 'push' && github.event.created == true && github.event.deleted == false && github.event.repository.private == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')"
+const centralDispatchGuard = "github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''"
 requireText(workflow, 'name: MyWallpaper add-on admission-v1', 'the versioned contract name')
 requireText(workflow, 'workflow_call:', 'the reusable workflow trigger')
-requireText(workflow, pushTagGuard, 'the newly-created v-prefixed tag guard')
+requireText(workflow, centralDispatchGuard, 'the central publication dispatch guard')
 requireText(workflow, 'replica: [1, 2]', 'exactly two build replicas')
 requireText(workflow, 'runs-on: windows-2025', 'the reviewed Windows build image')
 requireText(workflow, 'runs-on: ubuntu-24.04', 'the data-only Ubuntu publisher image')
@@ -139,7 +139,7 @@ for (let index = 0; index < lines.length; index += 1) {
 if (runBodies.some((body) => body.includes('${{'))) {
   fail('Shell bodies must consume GitHub and step values only through environment variables.')
 }
-if ((workflow.match(/\$env:WORKFLOW_REF -cne "\$prefix\$env:WORKFLOW_SHA"/gu) ?? []).length !== 3) {
+if ((workflow.match(/\$env:DISPATCH_SHA -cne \$env:WORKFLOW_SHA/gu) ?? []).length !== 3) {
   fail('Every job must require the exact full reusable-workflow SHA reference.')
 }
 if (workflow.includes('${prefix}refs/heads/admission-v1')) {
@@ -397,16 +397,16 @@ requireText(publisher, 'imageOs = [string]$env:ImageOS', 'publisher image OS obs
 requireText(publisher, 'imageVersion = [string]$env:ImageVersion', 'publisher image version observation')
 requireText(publisher, 'nodeVersion = $nodeVersion', 'publisher Node.js observation')
 requireText(publisher, 'pwshVersion = $pwshVersion', 'publisher PowerShell observation')
-requireText(publisher, 'mywallpaper-native-admission-development', 'the development finalizer audience')
-requireText(publisher, 'mywallpaper-native-admission-production', 'the production finalizer audience')
+requireText(publisher, 'mywallpaper-addon-publication-development', 'the development finalizer audience')
+requireText(publisher, 'mywallpaper-addon-publication-production', 'the production finalizer audience')
 requireText(
   publisher,
-  '/api/internal/native-admission/releases',
+  '/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases',
   'the hardcoded native admission finalizer endpoint',
 )
 requireText(
   publisher,
-  '/api/internal/addon-release-ingestion',
+  '/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion',
   'the dedicated non-OpenAPI ingestion endpoint',
 )
 requireText(publisher, 'publish-release-assets.ps1', 'content-addressed GitHub Release asset publication')
@@ -432,8 +432,8 @@ if (draftIndex < 0 || attestIndex <= draftIndex || proofIndex <= attestIndex || 
   || evidenceIndex <= ingestionIndex || finalizerIndex <= evidenceIndex) {
   fail('Draft, attestation, immutable publication, ingestion and finalization are out of order.')
 }
-if ((publisher.match(/ACTIONS_ID_TOKEN_REQUEST_TOKEN/gu) ?? []).length !== 2) {
-  fail('The legacy publisher must request separate ingestion and finalizer OIDC tokens.')
+if (publisher.includes('ACTIONS_ID_TOKEN_REQUEST_TOKEN')) {
+  fail('Publication callbacks must obtain fresh OIDC tokens through the bounded callback helper.')
 }
 for (const forbiddenHeader of [
   'X-MyWallpaper-Admission-Contract',
@@ -452,10 +452,10 @@ if (publisher.includes('/api/addon-releases')) {
   fail('The legacy OpenAPI add-on release endpoint must not expose admission ingestion.')
 }
 if (workflow.includes('github.event.release') || workflow.includes("github.event_name == 'release'")) {
-  fail('admission-v1 must derive publication only from a newly-created tag push.')
+  fail('Publication must originate from the central workflow dispatch.')
 }
-const releaseGuards = workflow.split(pushTagGuard).length - 1
-if (releaseGuards !== 3) fail('Every admission-v1 job must have the exact new-tag push guard.')
+const releaseGuards = workflow.split(centralDispatchGuard).length - 1
+if (releaseGuards !== 3) fail('Every admission-v1 job must have the exact central-dispatch guard.')
 if ((workflow.match(/^\s{4}runs-on:/gmu) ?? []).length !== 3) {
   fail('admission-v1 must remain two matrix replicas plus one verifier and one publisher job.')
 }
