@@ -295,10 +295,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The frozen JavaScript dependency install failed' }
           pnpm typecheck
           if ($LASTEXITCODE -ne 0) { throw 'Add-on typecheck failed' }
-          pnpm run --if-present test
-          if ($LASTEXITCODE -ne 0) { throw 'Add-on test suite failed' }
           pnpm build
           if ($LASTEXITCODE -ne 0) { throw 'Add-on web build failed' }
+          pnpm run --if-present test
+          if ($LASTEXITCODE -ne 0) { throw 'Add-on test suite failed' }
 
       - name: Stage only the untrusted web output
         shell: pwsh

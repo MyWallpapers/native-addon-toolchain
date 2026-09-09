@@ -22,15 +22,15 @@ try {
     name = 'Admission fixture'
     description = 'Exercises the public admission-v1 evidence boundary.'
     version = '1.2.3'
-    entry = 'dist/index.html'
+    entry = 'dist/addon.js'
     thumbnail = 'assets/thumbnail.png'
     settings = @()
     ui = [ordered]@{ pointerEvents = 'none' }
   } | ConvertTo-Json -Depth 8 -Compress |
     Set-Content -LiteralPath "$source/manifest.json" -Encoding utf8NoBOM
   'MIT License fixture' | Set-Content -LiteralPath "$source/LICENSE" -Encoding utf8NoBOM
-  '<!doctype html><title>admission fixture</title>' |
-    Set-Content -LiteralPath "$source/dist/index.html" -Encoding utf8NoBOM
+  'export function mount() { return { dispose() {} }; }' |
+    Set-Content -LiteralPath "$source/dist/addon.js" -Encoding utf8NoBOM
   [IO.File]::WriteAllBytes("$source/assets/thumbnail.png", [byte[]](1, 2, 3, 4))
   [ordered]@{
     name = 'admission-fixture'
@@ -52,7 +52,7 @@ try {
 
   $primary = Join-Path $temporary 'primary'
   New-Item -ItemType Directory -Path "$primary/web/dist", "$primary/companion", "$primary/hooks" -Force | Out-Null
-  Copy-Item -LiteralPath "$source/dist/index.html" -Destination "$primary/web/dist/index.html"
+  Copy-Item -LiteralPath "$source/dist/addon.js" -Destination "$primary/web/dist/addon.js"
   New-Item -ItemType File -Path "$primary/companion/.empty", "$primary/hooks/.empty" | Out-Null
   $reproduction = Join-Path $temporary 'reproduction'
   Copy-Item -LiteralPath $primary -Destination $reproduction -Recurse

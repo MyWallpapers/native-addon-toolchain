@@ -145,8 +145,8 @@ jobs:
             -OutputRoot "$env:RUNNER_TEMP/build/hooks"
 
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/build/web/dist", fixtures/native-hook/assets | Out-Null
-          '<!doctype html><meta charset="utf-8"><title>fixture</title>' |
-            Set-Content -LiteralPath "$env:RUNNER_TEMP/build/web/dist/index.html" -Encoding utf8NoBOM
+          'export function mount() { return { dispose() {} }; }' |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP/build/web/dist/addon.js" -Encoding utf8NoBOM
           Add-Type -AssemblyName System.Drawing
           $bitmap = [Drawing.Bitmap]::new(640, 360)
           try {

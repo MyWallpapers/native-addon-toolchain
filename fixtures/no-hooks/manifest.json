@@ -3,7 +3,7 @@
   "name": "No hooks smoke",
   "description": "Exercises an add-on without native hooks.",
   "version": "1.0.0",
-  "entry": "dist/index.html",
+  "entry": "dist/addon.js",
   "thumbnail": "assets/thumbnail.png",
   "deviceSettingsVersion": "1",
   "settings": [],

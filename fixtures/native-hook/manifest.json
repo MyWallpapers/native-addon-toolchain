@@ -3,7 +3,7 @@
   "name": "Native hook build smoke",
   "description": "Exercises the official Windhawk build and bundle pipeline.",
   "version": "0.0.0",
-  "entry": "dist/index.html",
+  "entry": "dist/addon.js",
   "thumbnail": "assets/thumbnail.png",
   "deviceSettingsVersion": "1",
   "settings": [
