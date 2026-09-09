@@ -213,6 +213,16 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression
           $zip = [IO.Compression.ZipFile]::OpenRead("$env:RUNNER_TEMP/first.zip")
           try {
+            $hookSourcePath = 'native/out/hooks/build-smoke/mod.wh.cpp'
+            $hookSourceEntry = $zip.GetEntry($hookSourcePath)
+            if ($null -eq $hookSourceEntry) { throw 'Signed bundle omitted the Windhawk metadata source' }
+            $hookSourceStream = $hookSourceEntry.Open()
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try {
+              $packedSourceHash = [Convert]::ToHexString($hasher.ComputeHash($hookSourceStream))
+            } finally { $hasher.Dispose(); $hookSourceStream.Dispose() }
+            $originalSourceHash = (Get-FileHash -LiteralPath 'fixtures/native-hook/native/hooks/build-smoke.wh.cpp' -Algorithm SHA256).Hash
+            if ($packedSourceHash -cne $originalSourceHash) { throw 'Windhawk metadata source bytes changed during packaging' }
             $indexEntry = $zip.GetEntry('bundle-index.json')
             if ($null -eq $indexEntry) { throw 'Bundle index is missing' }
             $reader = [IO.StreamReader]::new($indexEntry.Open(), [Text.Encoding]::UTF8)
