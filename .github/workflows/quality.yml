@@ -325,6 +325,9 @@ jobs:
             --repository-name MyWallpapers/admission-fixture `
             --commit-sha $commit `
             --release-ref refs/tags/v0.0.0 `
+            --publication-request-id 019f0000-0000-7000-8000-000000000099 `
+            --publication-attempt-id 019f0000-0000-7000-8000-000000000100 `
+            --source-version 0.0.0 `
             --workflow-ref "MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@$workflowSha" `
             --workflow-sha $workflowSha `
             --run-id "$env:GITHUB_RUN_ID" `
