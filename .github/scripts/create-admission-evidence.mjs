@@ -373,6 +373,23 @@ async function main() {
     || options['release-ref'] !== `refs/tags/v${sourceVersion}`)) {
     fail('Frozen source version differs from the verified bundle or tag.')
   }
+  // Capabilities belong to the admission subject, not the strict distribution index.
+  // Read the immutable source manifest and bind it to the index's manifest digest.
+  const manifest = plainRecord(JSON.parse(runGit(
+    repositoryRoot,
+    ['show', `${commitSha}:manifest.json`],
+    'Committed release manifest',
+    operationalBudget.metadataBytes,
+  ).toString('utf8')), 'release manifest')
+  if (digestJson(manifest) !== bundleIndex.manifestDigest) {
+    fail('Committed release manifest differs from the bundle index.')
+  }
+  const capabilitySnapshot = {
+    runtime: manifest.runtime,
+    settings: manifest.settings,
+    native: manifest.native ?? null,
+    ui: manifest.ui ?? null,
+  }
   const distributionDigest = digestJson(bundleIndex)
   const archive = await digestBoundedRegularFile(options.archive, {
     label: 'release archive',
@@ -617,7 +634,7 @@ async function main() {
       version: bundleIndex.version,
       distributionDigest,
       manifestDigest: bundleIndex.manifestDigest,
-      capabilitySnapshot: bundleIndex.capabilitySnapshot,
+      capabilitySnapshot,
     },
     artifact: {
       name: 'mywallpaper-addon-bundle.zip',

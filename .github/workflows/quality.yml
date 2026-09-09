@@ -231,12 +231,12 @@ jobs:
             $indexKeys = @($index.PSObject.Properties.Name | Sort-Object)
             $expectedIndexKeys = @(
               'schemaVersion', 'version', 'provenance', 'sourceDigest',
-              'manifestDigest', 'capabilitySnapshot', 'entry', 'files'
+              'manifestDigest', 'entry', 'files'
             ) | Sort-Object
             if (($indexKeys -join "`n") -cne ($expectedIndexKeys -join "`n")) {
               throw 'Bundle index contains a non-canonical root field'
             }
-            if ($index.schemaVersion -ne 1 -or $index.capabilitySnapshot.runtime -cne 'canvas-native-v1') {
+            if ($index.schemaVersion -ne 1) {
               throw 'Bundle index does not use the canonical contract'
             }
             if (@($index.files).Count -eq 0 -or $null -ne $index.distributionDigest) {
