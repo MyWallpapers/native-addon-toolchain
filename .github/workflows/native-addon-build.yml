@@ -769,7 +769,7 @@ jobs:
           retention-days: 1
 
   attest-publish:
-    name: Attest, publish and finalize with OIDC
+    name: Attest and publish the result for broker collection
     needs: verify-package
     if: github.event_name == 'workflow_dispatch' && github.repository == 'MyWallpapers/native-addon-toolchain' && inputs.publication_request_id != ''
     runs-on: ubuntu-24.04
@@ -843,66 +843,6 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: toolchain/.nvmrc
-
-      - name: Resolve the hardcoded publication endpoint
-        id: publication
-        shell: pwsh
-        env:
-          PUBLICATION_CHANNEL: ${{ inputs.channel }}
-          PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
-        run: |
-          switch ($env:PUBLICATION_CHANNEL) {
-            'development' {
-              'audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
-              'finalizer-audience=mywallpaper-addon-publication-development' >> $env:GITHUB_OUTPUT
-              "completion-url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-              "finalizer-base=https://dev.mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
-              "url=https://dev.mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
-            }
-            'production' {
-              'audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
-              'finalizer-audience=mywallpaper-addon-publication-production' >> $env:GITHUB_OUTPUT
-              "completion-url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/complete" >> $env:GITHUB_OUTPUT
-              "finalizer-base=https://mywallpaper.online/api/internal/native-admission/publication-requests/$env:PUBLICATION_REQUEST_ID/releases" >> $env:GITHUB_OUTPUT
-              "url=https://mywallpaper.online/api/internal/addon-publication-requests/$env:PUBLICATION_REQUEST_ID/ingestion" >> $env:GITHUB_OUTPUT
-            }
-            default { throw 'channel must be development or production' }
-          }
-
-      - name: Mark the double rebuild as verified
-        shell: pwsh
-        env:
-          AUTHORIZATION_AUDIENCE: ${{ steps.publication.outputs.audience }}
-          COMPLETION_URL: ${{ steps.publication.outputs.completion-url }}
-          PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
-          PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
-        run: |
-          $request = [ordered]@{
-            schemaVersion = 1
-            publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
-            outcome = 'succeeded'
-            failureClass = $null
-            errorCode = $null
-          }
-          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
-          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
-            ($request | ConvertTo-Json -Depth 4 -Compress)
-          )
-          $response = Invoke-MyWallpaperIdempotentJsonPost `
-            -Uri $env:COMPLETION_URL `
-            -Headers @{
-              'Idempotency-Key' = "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):complete:verified"
-            } `
-            -Body $requestBytes `
-            -Operation 'MyWallpaper verification completion' `
-            -Audience $env:AUTHORIZATION_AUDIENCE
-          $responseKeys = @($response.PSObject.Properties.Name | Sort-Object)
-          $expectedResponseKeys = @('publicationRequestId', 'state') | Sort-Object
-          if (($responseKeys -join "`n") -cne ($expectedResponseKeys -join "`n") -or
-              [string]$response.publicationRequestId -cne $env:PUBLICATION_REQUEST_ID -or
-              [string]$response.state -cne 'verifying') {
-            throw 'Publication completion response did not enter the verifying state'
-          }
 
       - name: Download bundle parts without executing or extracting them
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1116,7 +1056,7 @@ jobs:
           predicate-type: https://mywallpaper.online/predicates/github-hosted-runner-observation/v1
           predicate-path: ${{ steps.runner-observation.outputs.predicate }}
 
-      - name: Verify both GitHub/Sigstore proofs before admission OIDC
+      - name: Verify both GitHub/Sigstore proofs before publishing the result
         shell: pwsh
         env:
           BUNDLE_ATTESTATION_BUNDLE: ${{ steps.bundle-attestation.outputs.bundle-path }}
@@ -1211,281 +1151,52 @@ jobs:
             -BundleArtifact $bundleArtifact `
             -MaterialsArtifact $materialsArtifact
 
-      - name: Publish the immutable release through GitHub OIDC
-        id: ingestion
+      - name: Write the bound publication result for broker collection
+        id: result
         shell: pwsh
         env:
+          SUBJECT_PATH: ${{ steps.admission.outputs.subject }}
           BUNDLE_ARTIFACT_PATH: ${{ steps.release-assets.outputs.bundle-artifact }}
-          EXPECTED_BUNDLE_SHA256: ${{ needs.verify-package.outputs.archive-sha256 }}
-          EXPECTED_BUNDLE_SIZE: ${{ needs.verify-package.outputs.archive-size }}
-          PUBLICATION_AUDIENCE: ${{ steps.publication.outputs.audience }}
-          PUBLICATION_URL: ${{ steps.publication.outputs.url }}
-          DISTRIBUTION_DIGEST: ${{ needs.verify-package.outputs.distribution-digest }}
+          MATERIALS_ARTIFACT_PATH: ${{ steps.release-assets.outputs.materials-artifact }}
+          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
+          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
           IMMUTABLE_RELEASE: ${{ steps.immutable-release.outputs.release-immutable }}
-          PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
           PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
-          SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
-          SOURCE_REF: ${{ env.MYWALLPAPER_SOURCE_REF }}
-          SOURCE_REPOSITORY: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY }}
-          SOURCE_REPOSITORY_ID: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}
-          SOURCE_VERSION: ${{ env.MYWALLPAPER_SOURCE_VERSION }}
+          PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
         run: |
           if ($env:IMMUTABLE_RELEASE -cne 'true') {
-            throw 'MyWallpaper OIDC is forbidden until GitHub confirms an immutable release'
-          }
-          $repositoryId = $env:SOURCE_REPOSITORY_ID
-          $commitSha = $env:SOURCE_COMMIT_SHA
-          if ([string]::IsNullOrWhiteSpace($repositoryId) -or $repositoryId -cnotmatch '\A[0-9]+\z') {
-            throw 'GITHUB_REPOSITORY_ID must be a non-empty numeric repository ID'
-          }
-          if ([string]::IsNullOrWhiteSpace($commitSha) -or $commitSha -cnotmatch '\A[0-9a-fA-F]{40}\z') {
-            throw 'GITHUB_SHA must be a 40-character hexadecimal commit SHA'
-          }
-          $idempotencyKey = $(
-            "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):ingestion"
-          )
-          if ($idempotencyKey -cnotmatch '\Aaddon-publication:[0-9a-f-]{36}:[0-9a-f-]{36}:ingestion\z') {
-            throw 'Add-on release idempotency key construction failed'
-          }
-          . toolchain/.github/scripts/release-artifact-contract.ps1
-          $artifact = (Read-ReleaseArtifactDescriptor $env:BUNDLE_ARTIFACT_PATH 'bundle' 1000).Artifact
-          if ([string]$artifact.sha256 -cne $env:EXPECTED_BUNDLE_SHA256 -or
-              [long]$artifact.sizeBytes -ne [long]$env:EXPECTED_BUNDLE_SIZE) {
-            throw 'GitHub bundle artifact descriptor differs from the verified logical archive'
-          }
-          $request = $(
-            [ordered]@{
-              schemaVersion = 1
-              publicationAttemptId = $env:PUBLICATION_ATTEMPT_ID
-              artifact = $artifact
-              distributionDigest = $env:DISTRIBUTION_DIGEST
-            }
-          )
-          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes(
-            ($request | ConvertTo-Json -Depth 8 -Compress)
-          )
-          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
-          try {
-            $publicationHeaders = @{
-              'Idempotency-Key' = $idempotencyKey
-              'X-Request-ID' = $idempotencyKey
-            }
-            $response = $(
-              Invoke-MyWallpaperIdempotentJsonPost `
-                -Uri $env:PUBLICATION_URL `
-                -Headers $publicationHeaders `
-                -Body $requestBytes `
-                -Operation 'MyWallpaper immutable release publication' `
-                -Audience $env:PUBLICATION_AUDIENCE `
-                -PendingStates @('queued', 'processing') `
-                -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
-                -RetryHorizonSec 1500 `
-                -MaxAttempts 320
-            )
-          } catch {
-            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
-            throw "MyWallpaper publication rejected the release: $detail"
-          }
-          if ($response.state -cnotin @('candidate', 'available')) {
-            throw "MyWallpaper publication returned an invalid release state: $($response.state)"
-          }
-          if ($response.distributionDigest -cne $env:DISTRIBUTION_DIGEST) {
-            throw 'MyWallpaper publication returned a different distribution digest'
-          }
-          if (([string]$response.addonReleaseId) -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'MyWallpaper publication returned an invalid release identity'
-          }
-          $nativeManifestDigest = [string]$response.nativeManifestDigest
-          if ($response.state -ceq 'candidate') {
-            if ($nativeManifestDigest -cnotmatch '^sha256:[0-9a-f]{64}$') {
-              throw 'MyWallpaper candidate response omitted the native manifest digest'
-            }
-            'The immutable bundle is a native candidate; finalization continues in this job.' |
-              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-          }
-          "state=$($response.state)" >> $env:GITHUB_OUTPUT
-          "addon-release-id=$($response.addonReleaseId)" >> $env:GITHUB_OUTPUT
-          "native-manifest-digest=$nativeManifestDigest" >> $env:GITHUB_OUTPUT
-          $response | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-
-      - name: Create NativeBuildEvidenceV1 for the accepted candidate
-        if: steps.ingestion.outputs.state == 'candidate'
-        id: native-evidence
-        shell: pwsh
-        env:
-          ADDON_RELEASE_ID: ${{ steps.ingestion.outputs.addon-release-id }}
-          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
-          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
-          GITHUB_TOKEN: ${{ github.token }}
-          NATIVE_MANIFEST_DIGEST: ${{ steps.ingestion.outputs.native-manifest-digest }}
-          SOURCE_COMMIT_SHA: ${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}
-          SOURCE_REPOSITORY: ${{ env.MYWALLPAPER_SOURCE_REPOSITORY }}
-          SUBJECT_PATH: ${{ steps.admission.outputs.subject }}
-          WORKFLOW_REPOSITORY_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          if ($env:SOURCE_REPOSITORY -cnotmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$') {
-            throw 'Caller repository name is invalid'
-          }
-          $licenseUri = "https://api.github.com/repos/$env:SOURCE_REPOSITORY/license?ref=$([Uri]::EscapeDataString($env:SOURCE_COMMIT_SHA))"
-          try {
-            $licenseResponse = Invoke-RestMethod `
-              -Uri $licenseUri `
-              -MaximumRedirection 0 `
-              -Headers @{
-                Accept = 'application/vnd.github+json'
-                Authorization = "Bearer $env:GITHUB_TOKEN"
-                'User-Agent' = 'MyWallpaper-admission-v1'
-                'X-GitHub-Api-Version' = '2026-03-10'
-              }
-          } catch {
-            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) { $_.Exception.Message } else { $_.ErrorDetails.Message }
-            throw "Could not resolve the exact source license through GitHub: $detail"
-          }
-          $licenseSpdx = [string]$licenseResponse.license.spdx_id
-          if (
-            $licenseSpdx -in @('NOASSERTION', 'OTHER') -or
-            $licenseSpdx -cnotmatch '^[A-Za-z0-9.+-]{1,64}$'
-          ) { throw 'GitHub did not identify an admissible SPDX license at the release commit' }
-
-          $evidencePath = Join-Path $env:RUNNER_TEMP 'native-build-evidence-v1.json'
-          if (Test-Path -LiteralPath $evidencePath) { throw 'Native evidence output already exists' }
-          $summaryJson = node toolchain/.github/scripts/create-native-build-evidence.mjs `
-            --subject $env:SUBJECT_PATH `
-            --addon-release-id $env:ADDON_RELEASE_ID `
-            --license-spdx $licenseSpdx `
-            --native-manifest-digest $env:NATIVE_MANIFEST_DIGEST `
-            --materials-digest $env:EXPECTED_MATERIALS_SHA256 `
-            --materials-size $env:EXPECTED_MATERIALS_SIZE `
-            --workflow-ref $env:WORKFLOW_REPOSITORY_REF `
-            --workflow-sha $env:WORKFLOW_SHA `
-            --output $evidencePath
-          if ($LASTEXITCODE -ne 0) { throw 'NativeBuildEvidenceV1 generation failed' }
-          $summary = $summaryJson | ConvertFrom-Json
-          if (
-            $summary.evidencePath -cne $evidencePath -or
-            $summary.evidenceDigest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
-            $summary.materialsDigest -cne $env:EXPECTED_MATERIALS_SHA256 -or
-            [long]$summary.materialsSizeBytes -ne [long]$env:EXPECTED_MATERIALS_SIZE
-          ) { throw 'NativeBuildEvidenceV1 summary differs from the verified admission proof' }
-          "evidence=$evidencePath" >> $env:GITHUB_OUTPUT
-          "evidence-sha256=$($summary.evidenceDigest)" >> $env:GITHUB_OUTPUT
-
-      - name: Finalize native admission with a second GitHub OIDC token
-        if: steps.ingestion.outputs.state == 'candidate'
-        shell: pwsh
-        env:
-          ADDON_RELEASE_ID: ${{ steps.ingestion.outputs.addon-release-id }}
-          EVIDENCE_PATH: ${{ steps.native-evidence.outputs.evidence }}
-          EXPECTED_EVIDENCE_SHA256: ${{ steps.native-evidence.outputs.evidence-sha256 }}
-          EXPECTED_MATERIALS_SHA256: ${{ needs.verify-package.outputs.admission-materials-sha256 }}
-          EXPECTED_MATERIALS_SIZE: ${{ needs.verify-package.outputs.admission-materials-size }}
-          FINALIZER_AUDIENCE: ${{ steps.publication.outputs.finalizer-audience }}
-          FINALIZER_BASE_URL: ${{ steps.publication.outputs.finalizer-base }}
-          MATERIALS_ARTIFACT_PATH: ${{ steps.release-assets.outputs.materials-artifact }}
-          PUBLICATION_ATTEMPT_ID: ${{ env.MYWALLPAPER_PUBLICATION_ATTEMPT_ID }}
-          PUBLICATION_REQUEST_ID: ${{ env.MYWALLPAPER_PUBLICATION_REQUEST_ID }}
-        run: |
-          if ($env:ADDON_RELEASE_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'Native finalizer release identity is invalid'
-          }
-          if ($env:PUBLICATION_ATTEMPT_ID -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
-            throw 'Central native finalizer attempt identity is invalid'
-          }
-          $finalizerUrl = "$($env:FINALIZER_BASE_URL)/$($env:ADDON_RELEASE_ID)/evidence"
-          $uri = $null
-          if (
-            -not [Uri]::TryCreate($finalizerUrl, [UriKind]::Absolute, [ref]$uri) -or
-            $uri.Scheme -cne 'https'
-          ) { throw 'Native finalizer URL is invalid' }
-
-          if (-not (Test-Path -LiteralPath $env:EVIDENCE_PATH -PathType Leaf)) {
-            throw 'Native evidence file is missing'
-          }
-          $actualEvidenceDigest = 'sha256:' +
-            (Get-FileHash -LiteralPath $env:EVIDENCE_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualEvidenceDigest -cne $env:EXPECTED_EVIDENCE_SHA256) {
-            throw 'Native evidence changed before finalization'
-          }
-          $evidenceJson = Get-Content -LiteralPath $env:EVIDENCE_PATH -Raw
-          try {
-            $null = $evidenceJson | ConvertFrom-Json
-          } catch {
-            throw 'Native evidence file is not valid JSON'
-          }
-          . toolchain/.github/scripts/release-artifact-contract.ps1
-          $materials = (Read-ReleaseArtifactDescriptor $env:MATERIALS_ARTIFACT_PATH 'materials' 1000).Artifact
-          if ([string]$materials.sha256 -cne $env:EXPECTED_MATERIALS_SHA256 -or
-              [long]$materials.sizeBytes -ne [long]$env:EXPECTED_MATERIALS_SIZE) {
-            throw 'GitHub materials artifact descriptor differs from the verified logical archive'
-          }
-          $materialsJson = Get-Content -LiteralPath $env:MATERIALS_ARTIFACT_PATH -Raw
-          if ($env:GITHUB_RUN_ID -cnotmatch '^[1-9][0-9]{0,31}$' -or
-              $env:GITHUB_RUN_ATTEMPT -cnotmatch '^[1-9][0-9]{0,15}$') {
-            throw 'GitHub workflow attempt identity is invalid'
+            throw 'The broker result requires a confirmed immutable GitHub release'
           }
           $nodeVersion = (& node --version).Trim()
           if ($LASTEXITCODE -ne 0) { throw 'Could not observe the publisher Node.js version' }
           $pwshVersion = $PSVersionTable.PSVersion.ToString()
-          foreach ($observation in @($env:ImageOS, $env:ImageVersion, $nodeVersion, $pwshVersion)) {
-            $value = [string]$observation
-            if ([string]::IsNullOrWhiteSpace($value) -or $value -cne $value.Trim() -or
-                [Text.Encoding]::UTF8.GetByteCount($value) -gt 256 -or
-                $value -match '[\x00-\x1f\x7f]') {
-              throw 'GitHub publisher attempt observation is incomplete'
-            }
+          $publisher = @{
+            imageOs = [string]$env:ImageOS
+            imageVersion = [string]$env:ImageVersion
+            nodeVersion = $nodeVersion
+            pwshVersion = $pwshVersion
           }
-          $attempt = [ordered]@{
-            schemaVersion = 1
-            runId = [string]$env:GITHUB_RUN_ID
-            runAttempt = [string]$env:GITHUB_RUN_ATTEMPT
-            publisher = [ordered]@{
-              imageOs = [string]$env:ImageOS
-              imageVersion = [string]$env:ImageVersion
-              nodeVersion = $nodeVersion
-              pwshVersion = $pwshVersion
-            }
-          } | ConvertTo-Json -Depth 8 -Compress
-          $requestText = $(
-            '{"schemaVersion":1,"publicationAttemptId":' +
-              (($env:PUBLICATION_ATTEMPT_ID | ConvertTo-Json -Compress)) +
-              ',"evidence":' + $evidenceJson + ',"attempt":' + $attempt +
-              ',"materialsArtifact":' + $materialsJson + '}'
-          )
-          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestText)
+          $output = Join-Path $env:RUNNER_TEMP 'publication-result-v1.json'
+          $result = & toolchain/.github/scripts/write-publication-result.ps1 `
+            -SubjectPath $env:SUBJECT_PATH `
+            -BundleArtifactPath $env:BUNDLE_ARTIFACT_PATH `
+            -MaterialsArtifactPath $env:MATERIALS_ARTIFACT_PATH `
+            -ExpectedMaterialsDigest $env:EXPECTED_MATERIALS_SHA256 `
+            -ExpectedMaterialsSize ([long]$env:EXPECTED_MATERIALS_SIZE) `
+            -PublicationRequestId $env:PUBLICATION_REQUEST_ID `
+            -PublicationAttemptId $env:PUBLICATION_ATTEMPT_ID `
+            -RunId $env:GITHUB_RUN_ID `
+            -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -Publisher $publisher `
+            -OutputPath $output
+          "path=$output" >> $env:GITHUB_OUTPUT
+          "name=$($result.ArtifactName)" >> $env:GITHUB_OUTPUT
 
-          $finalizerHeaders = @{}
-          $finalizerHeaders['Idempotency-Key'] =
-            "addon-publication:$($env:PUBLICATION_REQUEST_ID):$($env:PUBLICATION_ATTEMPT_ID):evidence:$($env:ADDON_RELEASE_ID)"
-          . toolchain/.github/scripts/invoke-mywallpaper-idempotent-json.ps1
-          try {
-            $result = $(
-              Invoke-MyWallpaperIdempotentJsonPost `
-                -Uri $uri `
-                -Headers $finalizerHeaders `
-                -Body $requestBytes `
-                -Operation 'MyWallpaper native evidence finalization' `
-                -Audience $env:FINALIZER_AUDIENCE `
-                -PendingStates @('queued', 'processing') `
-                -PendingPublicationRequestId $env:PUBLICATION_REQUEST_ID `
-                -RetryHorizonSec 1500 `
-                -MaxAttempts 320
-            )
-          } catch {
-            $detail = if ([string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
-              $_.Exception.Message
-            } else {
-              $_.ErrorDetails.Message
-            }
-            throw "MyWallpaper native finalizer rejected the evidence: $detail"
-          }
-          if ([string]$result.addonReleaseId -cne $env:ADDON_RELEASE_ID) {
-            throw 'Native finalizer returned a different release identity'
-          }
-          if ([string]$result.state -cne 'available') {
-            throw "Native finalizer did not make the release available: $($result.state)"
-          }
-          if ([string]$result.evidenceDigest -cne $env:EXPECTED_EVIDENCE_SHA256) {
-            throw 'Native finalizer returned a different evidence digest'
-          }
-          $result | ConvertTo-Json -Depth 8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - name: Upload the bounded publication result for the GitHub-App broker
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.result.outputs.name }}
+          path: ${{ steps.result.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

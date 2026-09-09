@@ -46,15 +46,19 @@ build script.
 
 The Ubuntu publisher receives opaque artifacts, checks their digests and
 cross-bindings, and publishes only a workflow-controlled immutable release. It
-never checks out or extracts add-on source. Separate GitHub OIDC identities bind
-claim, ingestion and native evidence finalization. MyWallpaper verifies the exact
+never checks out or extracts add-on source. After GitHub confirms the immutable
+release, it uploads `publication-result-v1.json` as the exact request-, attempt-
+and run-bound Actions artifact expected by MyWallpaper. The GitHub-App broker
+observes the bound run and collects that result. MyWallpaper verifies the exact
 workflow identity, request/attempt binding, GitHub/Sigstore attestations and every
-published byte before accepting a release.
+published byte before its admission workers accept a release. A successful
+workflow produces evidence; only the backend decides whether it is admissible.
 
 Build workers have no MyWallpaper secret or OIDC permission. Reproducible output
 does not imply an offline build: native commands and dependency installation can
-use the network on disposable workers. Development and production use distinct
-hardcoded endpoints and audiences; authors cannot supply an upload URL.
+use the network on disposable workers. The workflow never calls a MyWallpaper
+claim, completion, ingestion or evidence endpoint. GitHub OIDC is used only for
+the GitHub/Sigstore attestations; the backend owns publication state transitions.
 
 The reviewed workspace budget is set in the workflow. Logical archives are split
 into deterministic content-addressed parts. Portable paths, regular files,
@@ -73,9 +77,9 @@ Operational workspace and GitHub transport limits are not product entitlements.
 
 Central dispatch executes the registered immutable tag, not a moving main-branch
 reference. The wrapper and reusable workflow must resolve to the same exact
-commit. Signed GitHub OIDC claims bind both workflow identities, the source,
-request, attempt and Actions run. Moving a branch or publishing a tag alone does
-not authorize a toolchain revision.
+commit. The broker binds the observed run to the registered workflow identity,
+source, request and attempt, then verifies the result and attestations. Moving a
+branch or publishing a tag alone does not authorize a toolchain revision.
 
 Compute the environment digest from a clean checkout of that exact commit:
 
@@ -84,8 +88,8 @@ node .github/scripts/compute-admission-environment-digest.mjs --workflow-sha FUL
 ```
 
 A platform retry creates a new server-bound attempt and transport release without
-replacing the immutable author tag or its bytes. Claim retries are bounded;
-unregistered runs and mismatched identities fail closed. Release assets are
+replacing the immutable author tag or its bytes. Unregistered runs and mismatched
+identities fail closed. Release assets are
 never overwritten or deleted to make a retry succeed.
 
 ## Canonical release validator
