@@ -115,7 +115,7 @@ while ($PendingBuildDirectories.Count -gt 0) {
     $Allowed = $Relative.StartsWith('web/dist/', [StringComparison]::OrdinalIgnoreCase) -or
       $Relative.StartsWith('companion/native/out/', [StringComparison]::OrdinalIgnoreCase) -or
       $Relative.StartsWith('hooks/native/out/', [StringComparison]::OrdinalIgnoreCase) -or
-      $Relative -cin @('companion/.empty', 'hooks/.empty')
+      $Relative -cin @('web/.empty', 'companion/.empty', 'hooks/.empty')
     if (-not $Allowed) { throw "Build artifact contains an unexpected file: $Relative" }
     $BuildFiles = Add-CheckedInt64 $BuildFiles 1 'Build file'
     $BuildBytes = Add-CheckedInt64 $BuildBytes $Item.Length 'Build byte'
@@ -127,11 +127,18 @@ while ($PendingBuildDirectories.Count -gt 0) {
     }
   }
 }
-Register-Tree (Join-Path $BuildRoot 'web/dist') 'dist' 'web build' $true
+$Manifest = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'manifest.json') -Raw | ConvertFrom-Json
+$HasWeb = -not [string]::IsNullOrWhiteSpace([string]$Manifest.entry) -or
+  -not [string]::IsNullOrWhiteSpace([string]$Manifest.services.entry)
+if (-not $HasWeb -and $Manifest.runtime -cne 'native-v1') { throw 'Only native-v1 may omit all Web entry points' }
+if ($HasWeb -and (Test-Path -LiteralPath (Join-Path $BuildRoot 'web/.empty'))) { throw 'Web entry points require a Web build' }
+if (-not $HasWeb -and (Test-Path -LiteralPath (Join-Path $BuildRoot 'web/dist'))) { throw 'Native-only output cannot include undeclared Web files' }
+if (-not $HasWeb -and -not (Test-Path -LiteralPath (Join-Path $BuildRoot 'web/.empty'))) { throw 'Missing native-only Web output marker' }
+Register-Tree (Join-Path $BuildRoot 'web/dist') 'dist' 'web build' $HasWeb
 Register-Tree (Join-Path $BuildRoot 'companion/native/out') 'native/out' 'companion build' $false
 Register-Tree (Join-Path $BuildRoot 'hooks/native/out') 'native/out' 'hook build' $false
 
-$AllowedMarkerPaths = @('companion/.empty', 'hooks/.empty')
+$AllowedMarkerPaths = @('web/.empty', 'companion/.empty', 'hooks/.empty')
 foreach ($Marker in $AllowedMarkerPaths) {
   $MarkerPath = Join-Path $BuildRoot $Marker.Replace('/', [IO.Path]::DirectorySeparatorChar)
   if (Test-Path -LiteralPath $MarkerPath) {

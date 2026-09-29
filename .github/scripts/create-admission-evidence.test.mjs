@@ -83,7 +83,7 @@ function runnerObservation(replica, workflowSha, imageVersion = '20260719.1') {
   }
 }
 
-test('admission-v1 evidence binds two identical replicas and rejects drift', async () => {
+test('admission-v2 binds one Web build and two independently identical native replicas', async () => {
   const toolchainRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
   const script = join(toolchainRoot, '.github', 'scripts', 'create-admission-evidence.mjs')
   const nativeEvidenceScript = join(toolchainRoot, '.github', 'scripts', 'create-native-build-evidence.mjs')
@@ -92,7 +92,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     const source = join(temporary, 'source')
     await mkdir(source)
     await writeFile(join(source, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
-    const manifest = { version: '1.2.3', runtime: 'canvas-native-v1', settings: [] }
+    const manifest = { version: '1.2.3', runtime: 'canvas-native-v1', entry: 'dist/index.html', settings: [] }
     await writeFile(join(source, 'manifest.json'), canonicalBytes(manifest))
     await writeFile(
       join(source, 'mywallpaper.config.json'),
@@ -118,6 +118,7 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     await writeFile(join(primary, 'companion', '.empty'), '')
     await writeFile(join(primary, 'hooks', 'native', 'out', 'hook.dll'), 'fixture-hook')
     await cp(primary, reproduction, { recursive: true })
+    await rm(join(reproduction, 'web'), { recursive: true })
 
     const observations = join(temporary, 'observations')
     for (const replica of [1, 2]) {
@@ -195,7 +196,9 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     const subjectBytes = await readFile(summary.subjectPath)
     const subject = JSON.parse(subjectBytes)
     assert.equal(summary.subjectDigest, digest(subjectBytes))
-    assert.equal(subject.contract, 'central-admission-v1')
+    assert.equal(subject.contract, 'central-admission-v2')
+    assert.equal(subject.build.reproductionScope, 'native')
+    assert.equal(subject.build.webOutputInventory.fileCount, 1)
     assert.deepEqual(subject.release.capabilitySnapshot, {
       runtime: manifest.runtime, settings: manifest.settings, native: null, ui: null,
     })
@@ -207,7 +210,14 @@ test('admission-v1 evidence binds two identical replicas and rejects drift', asy
     assert.notEqual(mismatchedManifest.status, 0)
     assert.match(mismatchedManifest.stderr, /Committed release manifest differs/u)
     await writeFile(bundleIndexPath, canonicalBytes(bundleIndex))
-
+    await writeFile(bundleIndexPath, canonicalBytes({
+      ...bundleIndex, capabilitySnapshot: { runtime: manifest.runtime },
+    }))
+    const extraIndexField = spawnSync(process.execPath,
+      argumentsFor(join(temporary, 'extra-index-field')), { encoding: 'utf8' })
+    assert.notEqual(extraIndexField.status, 0)
+    assert.match(extraIndexField.stderr, /bundle index fields do not match admission-v1/u)
+    await writeFile(bundleIndexPath, canonicalBytes(bundleIndex))
     assert.equal(subject.workflow.workflowSha, workflowSha)
     assert.equal(subject.source.commitSha, commitSha)
     assert.equal(subject.build.reproducible, true)

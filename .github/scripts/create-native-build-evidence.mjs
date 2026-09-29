@@ -138,7 +138,14 @@ async function main() {
     'version', 'distributionDigest', 'manifestDigest', 'capabilitySnapshot',
   ], 'admission-v1 release')
   exactKeys(subject.artifact, ['name', 'sizeBytes', 'sha256'], 'admission-v1 artifact')
-  exactKeys(subject.build, ['environmentDigest', 'reproducible', 'replicas'], 'admission-v1 build')
+  exactKeys(subject.build, ['environmentDigest', 'reproducible', 'reproductionScope', 'webOutputInventory', 'replicas'], 'admission-v2 build')
+  exactKeys(subject.build.webOutputInventory, ['fileCount', 'totalBytes', 'digest'], 'Web output inventory')
+  requiredString(subject.build.webOutputInventory.digest, 'Web output digest', SHA256_PATTERN, 71)
+  if (subject.build.reproductionScope !== 'native'
+    || !Number.isSafeInteger(subject.build.webOutputInventory.fileCount) || subject.build.webOutputInventory.fileCount < 0
+    || !Number.isSafeInteger(subject.build.webOutputInventory.totalBytes) || subject.build.webOutputInventory.totalBytes < 0) {
+    fail('Web output inventory or native reproduction scope is invalid.')
+  }
   exactKeys(subject.evidence, [
     'authorInventory', 'bundleIndexDigest', 'payloadInventoryDigest',
     'sbomDigest', 'provenanceDigest',
@@ -146,8 +153,8 @@ async function main() {
   exactKeys(subject.evidence.authorInventory, ['fileCount', 'totalBytes', 'digest'], 'author inventory')
   const workflowPrefix = 'MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@'
   const acceptedWorkflowRef = `${workflowPrefix}${workflowSha}`
-  if (subject.schemaVersion !== 1
-    || subject.contract !== 'central-admission-v1'
+  if (subject.schemaVersion !== 2
+    || subject.contract !== 'central-admission-v2'
     || subject.workflow.repository !== 'MyWallpapers/native-addon-toolchain'
     || subject.workflow.path !== '.github/workflows/native-addon-build.yml'
     || subject.workflow.requestedRef !== acceptedWorkflowRef

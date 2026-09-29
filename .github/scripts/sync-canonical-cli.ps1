@@ -23,7 +23,12 @@ if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($Status)) {
 
 Push-Location $MyWallpaperRoot
 try {
-  corepack pnpm --filter '@mywallpaper/cli' run build:release-validator
+  $ExpectedPackageManager = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).packageManager
+  $PnpmVersion = (& pnpm --version).Trim()
+  if ($LASTEXITCODE -ne 0 -or $ExpectedPackageManager -cne "pnpm@$PnpmVersion") {
+    throw "Canonical release validator requires the source-pinned $ExpectedPackageManager"
+  }
+  pnpm --filter '@mywallpaper/cli' run build:release-validator
   if ($LASTEXITCODE -ne 0) { throw 'Canonical release validator build failed' }
 } finally { Pop-Location }
 
@@ -110,8 +115,8 @@ try {
   $SharpRoot = Resolve-NodePackageRoot $CliRoot 'sharp'
   $SharpNodeModules = Split-Path -Parent $SharpRoot
   $RuntimePackages = [ordered]@{
-    'sharp' = @{ Root = $SharpRoot; Version = '0.35.3' }
-    '@img/sharp-win32-x64' = @{ Root = Join-Path $SharpNodeModules '@img/sharp-win32-x64'; Version = '0.35.3' }
+    'sharp' = @{ Root = $SharpRoot; Version = '0.35.4' }
+    '@img/sharp-win32-x64' = @{ Root = Join-Path $SharpNodeModules '@img/sharp-win32-x64'; Version = '0.35.4' }
     '@img/colour' = @{ Root = Join-Path $SharpNodeModules '@img/colour'; Version = '1.1.0' }
     'detect-libc' = @{ Root = Join-Path $SharpNodeModules 'detect-libc'; Version = '2.1.2' }
     'semver' = @{ Root = Join-Path $SharpNodeModules 'semver'; Version = '7.8.5' }

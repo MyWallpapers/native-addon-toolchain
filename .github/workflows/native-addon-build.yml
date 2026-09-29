@@ -252,33 +252,19 @@ jobs:
           retention-days: 1
 
       - name: Build the exact web release without credentials
+        if: matrix.replica == 1
         shell: pwsh
-        working-directory: caller-web
         env:
           CI: 'true'
           RELEASE_REF: ${{ env.MYWALLPAPER_SOURCE_REF }}
         run: |
           if ($env:RELEASE_REF -cnotmatch '^refs/tags/v') { throw 'Add-on releases are built only from a v-prefixed Git tag' }
-          corepack enable pnpm
-          if ($LASTEXITCODE -ne 0) { throw 'Could not enable the pinned pnpm package manager' }
-          pnpm install --frozen-lockfile
-          if ($LASTEXITCODE -ne 0) { throw 'The frozen JavaScript dependency install failed' }
-          pnpm typecheck
-          if ($LASTEXITCODE -ne 0) { throw 'Add-on typecheck failed' }
-          pnpm build
-          if ($LASTEXITCODE -ne 0) { throw 'Add-on web build failed' }
-          pnpm run --if-present test
-          if ($LASTEXITCODE -ne 0) { throw 'Add-on test suite failed' }
-
-      - name: Stage only the untrusted web output
-        shell: pwsh
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP 'mywallpaper-web-output'
-          Remove-Item -LiteralPath $output -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force "$output/web" | Out-Null
-          Copy-Item -LiteralPath caller-web/dist -Destination "$output/web/dist" -Recurse -Force
+          & toolchain/.github/scripts/build-web-component.ps1 `
+            -RepositoryRoot caller-web `
+            -OutputRoot "$env:RUNNER_TEMP/mywallpaper-web-output"
 
       - name: Transfer only the untrusted web output
+        if: matrix.replica == 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mywallpaper-web-${{ matrix.replica }}-${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}-${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -394,12 +380,6 @@ jobs:
           name: mywallpaper-web-1-${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}-${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mywallpaper-build-output
 
-      - name: Download reproduced web output without executing it
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: mywallpaper-web-2-${{ env.MYWALLPAPER_SOURCE_REPOSITORY_ID }}-${{ env.MYWALLPAPER_SOURCE_COMMIT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mywallpaper-build-reproduction
-
       - name: Download primary companion output without executing it
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -497,7 +477,6 @@ jobs:
               throw "$label outputs are not reproducible from the immutable source commit"
             }
           }
-          Assert-ByteIdentical "$output/web" "$reproduction/web" 'Web build'
           Assert-ByteIdentical "$output/companion" "$reproduction/companion" 'Native companion build'
           Assert-ByteIdentical "$output/hooks" "$reproduction/hooks" 'Windhawk hook build'
           & toolchain/.github/scripts/materialize-addon-build.ps1 `
@@ -509,8 +488,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on binding generation failed' }
           node "$env:RUNNER_TEMP/mywallpaper-cli/cli/dist/bin.js" check --json --directory caller
           if ($LASTEXITCODE -ne 0) { throw 'Canonical add-on validation failed' }
-          git -C caller ls-files --error-unmatch -- generated/mywallpaper-runtime.d.ts
-          if ($LASTEXITCODE -ne 0) { throw 'generated/mywallpaper-runtime.d.ts must be committed' }
+          # Declarations are optional authoring aids. Regenerate them for the
+          # verifier; only an already tracked declaration can be stale.
           git -C caller diff --exit-code -- . ':(exclude)dist/**' ':(exclude)native/out/**' ':(exclude)native/generated/**'
           if ($LASTEXITCODE -ne 0) { throw 'Generated add-on bindings are stale' }
 
@@ -932,8 +911,8 @@ jobs:
           if ($subjectDigest -cne $env:EXPECTED_SUBJECT_SHA256) { throw 'Admission subject digest changed in transfer' }
           $subject = Get-Content -LiteralPath $subjectPath -Raw | ConvertFrom-Json
           $resolvedWorkflowRef = "$env:WORKFLOW_REPOSITORY/$env:WORKFLOW_FILE@$env:WORKFLOW_SHA"
-          $expectedContract = 'central-admission-v1'
-          if ($subject.schemaVersion -ne 1 -or $subject.contract -cne $expectedContract -or
+          $expectedContract = 'central-admission-v2'
+          if ($subject.schemaVersion -ne 2 -or $subject.contract -cne $expectedContract -or
               $subject.workflow.repository -cne $env:WORKFLOW_REPOSITORY -or
               $subject.workflow.path -cne $env:WORKFLOW_FILE -or
               $subject.workflow.requestedRef -cne $resolvedWorkflowRef -or
