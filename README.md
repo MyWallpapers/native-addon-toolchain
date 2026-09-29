@@ -12,7 +12,7 @@ exact registered publication authority.
 2. After quality checks pass, push a new immutable `v<version>` source tag whose
    version matches the manifest.
 3. Open the add-on management page in MyWallpaper and select that tag. Publication
-   requires an active lifetime entitlement.
+   is available to Free, subscription and lifetime accounts within their quotas.
 
 The platform freezes the numeric repository identity, tag, commit, version,
 request UUID and attempt UUID before dispatching
@@ -32,15 +32,19 @@ wallpapers remain pinned to their exact release until explicitly changed.
 
 ## Rebuild and verification
 
-Two independent disposable GitHub-hosted Windows 2025 workers rebuild the exact
-source. Each worker uses separate pristine credential-free checkouts for native
-and web work. Native outputs leave the worker before registry-installed web
-packages run. Web artifacts are built before artifact-dependent package tests.
+Two independent disposable GitHub-hosted Windows 2025 workers rebuild the native
+components of the exact source. The first worker also builds declared UI and
+service-worker entries once, in a separate pristine credential-free checkout.
+Native outputs leave that worker before registry-installed web packages run.
+Native-only add-ons need no web build, package manager, thumbnail or web entry.
+Web artifacts are built before artifact-dependent package tests.
 
 A separate Windows verifier receives untrusted outputs as data, verifies the
 canonical CLI archive, regenerates the Canvas declaration, validates the
 manifest and assets, and requires matching output paths, sizes and SHA-256
-across replicas. It creates the deterministic bundle index, archive, CycloneDX
+across the two native replicas. Admission v2 records that reproduction scope
+explicitly and binds the single web output inventory to the packaged payload;
+it does not claim independent reproduction of web packages. It creates the deterministic bundle index, archive, CycloneDX
 SBOM, provenance and admission materials. It never executes an add-on binary or
 build script.
 
@@ -107,7 +111,10 @@ pwsh .github/scripts/sync-canonical-cli.ps1 `
   -SourceCommit FULL_MYWALLPAPER_COMMIT_SHA
 ```
 
-Authors commit `generated/mywallpaper-runtime.d.ts`. The release verifier
-regenerates it and rejects missing or stale declarations. SDK material remains
-under its source-visible SDK license; upstream native components retain their
+Authors may commit `generated/mywallpaper-runtime.d.ts`. The release verifier
+regenerates it and rejects a stale tracked declaration; JavaScript and native-only
+authors need not commit a TypeScript binding. Dependency lockfiles are inventoried
+when present; a native-only package does not need a JavaScript package manager.
+SDK material remains
+under the MIT license; upstream native components retain their
 own licenses and notices.

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$NativeOnly)
 
 $ErrorActionPreference = 'Stop'
 $toolchainRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).ProviderPath
@@ -16,20 +16,27 @@ try {
   $env:GIT_CONFIG_VALUE_0 = $toolchainRoot
 
   $source = Join-Path $temporary 'source'
-  New-Item -ItemType Directory -Path "$source/dist", "$source/assets" -Force | Out-Null
-  [ordered]@{
-    runtime = 'canvas-native-v1'
+  New-Item -ItemType Directory -Path $source -Force | Out-Null
+  $manifest = [ordered]@{
+    runtime = $(if ($NativeOnly) { 'native-v1' } else { 'canvas-native-v1' })
     name = 'Admission fixture'
-    description = 'Exercises the public admission-v1 evidence boundary.'
+    description = 'Exercises the public admission-v2 evidence boundary.'
     version = '1.2.3'
-    entry = 'dist/addon.js'
-    thumbnail = 'assets/thumbnail.png'
     settings = @()
-    ui = [ordered]@{ pointerEvents = 'none' }
-  } | ConvertTo-Json -Depth 8 -Compress |
+  }
+  if ($NativeOnly) {
+    $manifest.native = @{ companion = @{ runtime = 'process-v2'; entries = @{ 'windows-x86_64' = 'native/out/windows-x86_64/companion.exe' } } }
+  } else {
+    $manifest.entry = 'dist/addon.js'
+    $manifest.thumbnail = 'assets/thumbnail.png'
+    $manifest.ui = @{ pointerEvents = 'none' }
+    New-Item -ItemType Directory -Path "$source/dist", "$source/assets" -Force | Out-Null
+  }
+  $manifest | ConvertTo-Json -Depth 8 -Compress |
     Set-Content -LiteralPath "$source/manifest.json" -Encoding utf8NoBOM
   'MIT License fixture' | Set-Content -LiteralPath "$source/LICENSE" -Encoding utf8NoBOM
-  'export function mount() { return { dispose() {} }; }' |
+  if (-not $NativeOnly) {
+    'export function mount() { return { dispose() {} }; }' |
     Set-Content -LiteralPath "$source/dist/addon.js" -Encoding utf8NoBOM
   [IO.File]::WriteAllBytes("$source/assets/thumbnail.png", [byte[]](1, 2, 3, 4))
   [ordered]@{
@@ -41,6 +48,7 @@ try {
     Set-Content -LiteralPath "$source/package.json" -Encoding utf8NoBOM
   "lockfileVersion: '9.0'" |
     Set-Content -LiteralPath "$source/pnpm-lock.yaml" -Encoding utf8NoBOM
+  }
   git -C $source init --initial-branch=admission | Out-Null
   git -C $source config user.email 'admission-fixture@mywallpaper.invalid'
   git -C $source config user.name 'MyWallpaper admission fixture'
@@ -51,11 +59,23 @@ try {
   $workflowSha = (git -C $toolchainRoot rev-parse HEAD).Trim().ToLowerInvariant()
 
   $primary = Join-Path $temporary 'primary'
-  New-Item -ItemType Directory -Path "$primary/web/dist", "$primary/companion", "$primary/hooks" -Force | Out-Null
-  Copy-Item -LiteralPath "$source/dist/addon.js" -Destination "$primary/web/dist/addon.js"
-  New-Item -ItemType File -Path "$primary/companion/.empty", "$primary/hooks/.empty" | Out-Null
+  New-Item -ItemType Directory -Path "$primary/web", "$primary/companion", "$primary/hooks" -Force | Out-Null
+  New-Item -ItemType File -Path "$primary/hooks/.empty" | Out-Null
+  if ($NativeOnly) {
+    New-Item -ItemType File -Path "$primary/web/.empty" | Out-Null
+    New-Item -ItemType Directory -Path "$primary/companion/native/out/windows-x86_64" -Force | Out-Null
+    # Packaging fixture only: these bytes are never loaded or executed.
+    [IO.File]::WriteAllBytes("$primary/companion/native/out/windows-x86_64/companion.exe", [byte[]](77, 90, 1, 2))
+  } else {
+    New-Item -ItemType Directory -Path "$primary/web/dist" | Out-Null
+    Copy-Item -LiteralPath "$source/dist/addon.js" -Destination "$primary/web/dist/addon.js"
+    New-Item -ItemType File -Path "$primary/companion/.empty" | Out-Null
+  }
   $reproduction = Join-Path $temporary 'reproduction'
   Copy-Item -LiteralPath $primary -Destination $reproduction -Recurse
+  $reproductionWeb = [IO.Path]::GetFullPath((Join-Path $reproduction 'web'))
+  if (-not $reproductionWeb.StartsWith([IO.Path]::GetFullPath($temporary) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Replica path escapes the test directory' }
+  Remove-Item -LiteralPath $reproductionWeb -Recurse
 
   $archive = Join-Path $temporary 'bundle.zip'
   $metadata = Join-Path $temporary 'bundle-metadata'
@@ -76,6 +96,12 @@ try {
     -not (Test-Path -LiteralPath "$metadata/bundle-index.json" -PathType Leaf) -or
     -not (Test-Path -LiteralPath "$metadata/bundle-payload-inventory.json" -PathType Leaf)
   ) { throw 'Bundle packager did not export admission metadata' }
+  if ($NativeOnly) {
+    $index = Get-Content -LiteralPath "$metadata/bundle-index.json" -Raw | ConvertFrom-Json
+    if ($null -ne $index.entry -or @($index.files | Where-Object { $_.path -like 'dist/*' -or $_.path -like 'assets/*' }).Count -ne 0) {
+      throw 'Native-only packaging introduced an undeclared Web entry or thumbnail'
+    }
+  }
 
   $observations = Join-Path $temporary 'observations'
   foreach ($replica in @(1, 2)) {
@@ -165,7 +191,8 @@ try {
   $null = New-AdmissionEvidence $rerunEvidenceRoot
   $summary = $summaryJson | ConvertFrom-Json
   $subjectDigest = 'sha256:' + (Get-FileHash -LiteralPath $summary.subjectPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($subjectDigest -cne $summary.subjectDigest -or $summary.authorInventory.fileCount -ne 4) {
+  $expectedAuthorFiles = if ($NativeOnly) { 3 } else { 4 }
+  if ($subjectDigest -cne $summary.subjectDigest -or $summary.authorInventory.fileCount -ne $expectedAuthorFiles) {
     throw 'Admission integration subject is inconsistent'
   }
 
@@ -240,5 +267,8 @@ try {
   $env:GIT_CONFIG_COUNT = $originalGitConfigCount
   $env:GIT_CONFIG_KEY_0 = $originalGitConfigKey
   $env:GIT_CONFIG_VALUE_0 = $originalGitConfigValue
-  Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+  $resolvedTemporary = [IO.Path]::GetFullPath($temporary)
+  $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+  if (-not $resolvedTemporary.StartsWith($expectedParent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Temporary path escapes its parent' }
+  Remove-Item -LiteralPath $resolvedTemporary -Recurse -Force -ErrorAction SilentlyContinue
 }

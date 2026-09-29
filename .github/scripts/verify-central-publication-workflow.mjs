@@ -187,7 +187,7 @@ for (const fragment of [
   '--release-ref $env:SOURCE_REF',
 ]) requireText(reusable, fragment, `source identity argument ${fragment}`)
 requireText(reusable, '$bundleIndex.version -cne $env:EXPECTED_SOURCE_VERSION', 'verified manifest version binding')
-requireText(reusable, "$expectedContract = 'central-admission-v1'", 'central evidence verification')
+requireText(reusable, "$expectedContract = 'central-admission-v2'", 'central evidence verification')
 requireText(reusable, '$subject.publication.requestId -cne $env:PUBLICATION_REQUEST_ID', 'request-bound admission evidence')
 requireText(reusable, '$subject.publication.attemptId -cne $env:PUBLICATION_ATTEMPT_ID', 'attempt-bound admission evidence')
 

@@ -196,12 +196,14 @@ if ([string]::IsNullOrWhiteSpace($LicenseText) -or $LicenseText.Contains([char]0
 Add-BundleFile 'LICENSE' $LicensePath 'license'
 Add-Tree (Join-Path $RepositoryRoot 'dist') 'dist' 'web build'
 $ThumbnailRelative = [string]$Manifest.thumbnail
-$ThumbnailPath = Resolve-RegularFile $RepositoryRoot $ThumbnailRelative 'thumbnail'
-Add-BundleFile $ThumbnailRelative $ThumbnailPath 'thumbnail'
+if (-not [string]::IsNullOrWhiteSpace($ThumbnailRelative)) {
+  $ThumbnailPath = Resolve-RegularFile $RepositoryRoot $ThumbnailRelative 'thumbnail'
+  Add-BundleFile $ThumbnailRelative $ThumbnailPath 'thumbnail'
+}
 Add-Tree (Join-Path $CompanionRoot 'native/out') 'native/out' 'companion output'
 Add-Tree (Join-Path $HooksRoot 'native/out') 'native/out' 'hook output'
 
-if ($Entries.Count -lt 4) { throw 'Bundle must contain manifest, license, web output and thumbnail' }
+if ($Entries.Count -lt 3) { throw 'Bundle must contain manifest, license and declared runtime output' }
 $ExpandedBytes = 0L
 $Inventory = [Collections.Generic.List[object]]::new()
 foreach ($ArchivePath in @(Get-SortedEntryPaths)) {

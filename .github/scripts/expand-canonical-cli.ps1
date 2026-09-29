@@ -144,8 +144,8 @@ if (
 
 $ExpectedRuntimePackages = [ordered]@{
   '@mywallpaper/sdk' = '0.2.0'
-  'sharp' = '0.35.3'
-  '@img/sharp-win32-x64' = '0.35.3'
+  'sharp' = '0.35.4'
+  '@img/sharp-win32-x64' = '0.35.4'
   '@img/colour' = '1.1.0'
   'detect-libc' = '2.1.2'
   'semver' = '7.8.5'

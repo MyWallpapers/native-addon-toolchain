@@ -339,7 +339,10 @@ if (build.match(/runs-on:/gu)?.length !== 1
   || !/matrix:\r?\n        replica: \[1, 2\]/u.test(build)) {
   fail('Build boundary must remain one two-replica matrix job.')
 }
-for (const component of ['web', 'companion', 'hooks']) {
+requireText(verifier, 'mywallpaper-web-1-', 'single Web build')
+if (verifier.includes('mywallpaper-web-2-')) fail('Web output must not require an independent byte-identical rebuild.')
+requireText(build, 'build-web-component.ps1', 'optional Web entry point build')
+for (const component of ['companion', 'hooks']) {
   requireText(verifier, `mywallpaper-${component}-1-`, `primary ${component} output`)
   requireText(verifier, `mywallpaper-${component}-2-`, `reproduced ${component} output`)
 }

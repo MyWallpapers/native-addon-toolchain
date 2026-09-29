@@ -239,7 +239,16 @@ async function findReplicaObservations(root, maximumMetadataBytes) {
   return observations
 }
 
-async function trackedLockfiles(repositoryRoot, commitSha, operationalBudget) {
+function selectInventory(inventory, prefix) {
+  const files = inventory.document.files.filter(file => prefix === 'native'
+    ? /^(?:companion|hooks)\//u.test(file.path) : file.path.startsWith('web/dist/'))
+    .map(file => ({ ...file, path: prefix === 'native' ? file.path : file.path.slice(4) }))
+  const document = { schemaVersion: 1, files }
+  return { document, summary: { fileCount: files.length,
+    totalBytes: files.reduce((sum, file) => addChecked(sum, file.sizeBytes, 'Inventory'), 0), digest: digestJson(document) } }
+}
+
+async function trackedLockfiles(repositoryRoot, commitSha, operationalBudget, nativeOnly) {
   const output = runGit(
     repositoryRoot,
     ['ls-tree', '-r', '-z', '--name-only', commitSha],
@@ -249,7 +258,7 @@ async function trackedLockfiles(repositoryRoot, commitSha, operationalBudget) {
   const paths = output.toString('utf8').split('\0').filter(Boolean)
     .filter((path) => LOCKFILE_NAMES.has(basename(path)))
     .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
-  if (!paths.includes('pnpm-lock.yaml')) fail('The committed root pnpm-lock.yaml is required.')
+  if (!nativeOnly && !paths.includes('pnpm-lock.yaml')) fail('The committed root pnpm-lock.yaml is required for Web components.')
   if (paths.length > operationalBudget.files) {
     fail('Lockfile inventory exhausted the runner operational file budget.')
   }
@@ -364,6 +373,10 @@ async function main() {
     await readJson(options['bundle-index'], 'bundle index', operationalBudget.metadataBytes),
     'bundle index',
   )
+  exactKeys(bundleIndex, [
+    'schemaVersion', 'version', 'provenance', 'sourceDigest',
+    'manifestDigest', 'entry', 'files',
+  ], 'bundle index')
   const provenance = plainRecord(bundleIndex.provenance, 'bundle index provenance')
   if (bundleIndex.schemaVersion !== 1 || provenance.repositoryId !== repositoryId
     || `${provenance.owner}/${provenance.name}`.toLowerCase() !== repositoryName.toLowerCase()
@@ -384,11 +397,15 @@ async function main() {
   if (digestJson(manifest) !== bundleIndex.manifestDigest) {
     fail('Committed release manifest differs from the bundle index.')
   }
+  if (bundleIndex.entry !== (manifest.entry ?? manifest.services?.entry ?? null)) {
+    fail('Committed release entry differs from the bundle index.')
+  }
   const capabilitySnapshot = {
     runtime: manifest.runtime,
     settings: manifest.settings,
     native: manifest.native ?? null,
     ui: manifest.ui ?? null,
+    ...(manifest.services ? { services: manifest.services } : {}),
   }
   const distributionDigest = digestJson(bundleIndex)
   const archive = await digestBoundedRegularFile(options.archive, {
@@ -397,12 +414,14 @@ async function main() {
   })
   const archiveDigest = archive.sha256
 
-  const primary = await inventoryTree(options['primary-root'], 'primary replica', operationalBudget)
-  const reproduction = await inventoryTree(
+  const primaryOutput = await inventoryTree(options['primary-root'], 'primary output', operationalBudget)
+  const primary = selectInventory(primaryOutput, 'native')
+  const web = selectInventory(primaryOutput, 'web')
+  const reproduction = selectInventory(await inventoryTree(
     options['reproduction-root'],
     'reproduced replica',
     operationalBudget,
-  )
+  ), 'native')
   if (JSON.stringify(primary.document) !== JSON.stringify(reproduction.document)) {
     fail('Replica inventories are not byte-identical.')
   }
@@ -439,7 +458,9 @@ async function main() {
   )
   if (sourceTreeBytes.length === 0 || sourceTreeBytes.at(-1) !== 0x0a
     || digestBytes(sourceTreeBytes) !== bundleIndex.sourceDigest) fail('Source tree digest differs from the bundle index.')
-  const lockfiles = await trackedLockfiles(repositoryRoot, commitSha, operationalBudget)
+  const nativeOnly = manifest.runtime === 'native-v1' && bundleIndex.entry === null
+    && !manifest.services?.entry
+  const lockfiles = await trackedLockfiles(repositoryRoot, commitSha, operationalBudget, nativeOnly)
   const payload = payloadInventory(
     await readJson(
       options['payload-inventory'],
@@ -448,6 +469,9 @@ async function main() {
     ),
     operationalBudget,
   )
+  const packagedWeb = { schemaVersion: 1, files: payload.files.filter(file => file.path.startsWith('dist/'))
+    .map(({ path, sizeBytes, sha256 }) => ({ path, sizeBytes, sha256 })) }
+  if (digestJson(packagedWeb) !== web.summary.digest) fail('Packaged Web output differs from the single Web build.')
   const authorInventoryDocument = {
     schemaVersion: 1,
     files: payload.files.map(({ path, sizeBytes, sha256 }) => ({ path, sizeBytes, sha256 })),
@@ -502,7 +526,7 @@ async function main() {
     workflowSha,
   })
   const environmentDigest = canonicalJsonDigest(environment)
-  const replicaDocument = { schemaVersion: 1, replicas }
+  const replicaDocument = { schemaVersion: 2, reproductionScope: 'native', webOutputInventory: web.summary, replicas }
   const payloadDigest = digestJson(payload)
 
   const sourceCommitTimeText = runGit(
@@ -550,7 +574,7 @@ async function main() {
     predicateType: 'https://slsa.dev/provenance/v1',
     predicate: {
       buildDefinition: {
-        buildType: 'https://mywallpaper.online/buildTypes/addon-admission/v1',
+        buildType: 'https://mywallpaper.online/buildTypes/addon-admission/v2',
         externalParameters: {
           repository: repositoryName,
           repositoryId,
@@ -562,6 +586,8 @@ async function main() {
           workflowRef,
           workflowSha,
           environmentDigest,
+          reproductionScope: 'native',
+          webOutputInventory: web.summary,
           replicas,
         },
         resolvedDependencies: [
@@ -612,8 +638,8 @@ async function main() {
   await writeFile(join(outputRoot, 'source-git-tree.txt'), sourceTreeBytes, { flag: 'wx' })
 
   const subject = {
-    schemaVersion: 1,
-    contract: 'central-admission-v1',
+    schemaVersion: 2,
+    contract: 'central-admission-v2',
     generatedAt,
     publication: { requestId: publicationRequestId, attemptId: publicationAttemptId },
     source: {
@@ -644,6 +670,8 @@ async function main() {
     build: {
       environmentDigest,
       reproducible: true,
+      reproductionScope: 'native',
+      webOutputInventory: web.summary,
       replicas,
     },
     evidence: {
