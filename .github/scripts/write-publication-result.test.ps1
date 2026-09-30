@@ -10,8 +10,8 @@ try {
   $RequestId = '90000000-0000-7000-8000-000000000001'
   $AttemptId = '90000000-0000-7000-8000-000000000002'
   $Subject = [ordered]@{
-    schemaVersion = 1
-    contract = 'central-admission-v1'
+    schemaVersion = 2
+    contract = 'central-admission-v2'
     publication = @{requestId = $RequestId; attemptId = $AttemptId}
     source = @{repositoryId = '123456789'; repository = 'creator/addon'; commitSha = $Sha; ref = 'refs/tags/v1.0.0'}
     release = @{version = '1.0.0'; distributionDigest = $Digest}
@@ -21,7 +21,13 @@ try {
       workflowSha = $Sha
       requestedRef = "MyWallpapers/native-addon-toolchain/.github/workflows/native-addon-build.yml@$Sha"
     }
-    build = @{environmentDigest = $Digest; reproducible = $true}
+    build = @{
+      environmentDigest = $Digest
+      reproducible = $true
+      reproductionScope = 'native'
+      replicas = @(@{replica = 1}, @{replica = 2})
+      webOutputInventory = @{digest = $Digest; fileCount = 1; totalBytes = 100}
+    }
     artifact = @{sha256 = $Digest; sizeBytes = 100}
     generatedAt = '2026-09-09T16:05:06+02:00'
   }
@@ -90,13 +96,33 @@ try {
       throw "Accepted a substituted publication binding: $($Case.Keys -join ',')"
     }
   }
+  foreach ($Mutate in @(
+    { param($Value) $Value.schemaVersion = 1; $Value.contract = 'central-admission-v1' },
+    { param($Value) $Value.contract = 'central-admission-v1' },
+    { param($Value) $Value.build.reproducible = $false },
+    { param($Value) $Value.build.reproductionScope = 'web' },
+    { param($Value) $Value.build.replicas = @($Value.build.replicas[0]) }
+  )) {
+    $InvalidSubject = $SubjectText | ConvertFrom-Json
+    & $Mutate $InvalidSubject
+    $InvalidSubjectPath = Join-Path $Root ([guid]::NewGuid().ToString() + '.json')
+    [IO.File]::WriteAllText($InvalidSubjectPath, ($InvalidSubject | ConvertTo-Json -Depth 16 -Compress))
+    $Invalid = $Arguments.Clone()
+    $Invalid.SubjectPath = $InvalidSubjectPath
+    $Invalid.OutputPath = Join-Path $Root ([guid]::NewGuid().ToString() + '.json')
+    $Rejected = $false
+    try { $null = & $Writer @Invalid } catch { $Rejected = $true }
+    if (-not $Rejected -or (Test-Path -LiteralPath $Invalid.OutputPath)) {
+      throw 'Accepted an obsolete admission subject or an invalid native reproduction proof'
+    }
+  }
   $Subject.artifact.sha256 = 'sha256:' + ('c' * 64)
   [IO.File]::WriteAllText($SubjectPath, ($Subject | ConvertTo-Json -Depth 16 -Compress))
   $Arguments.OutputPath = Join-Path $Root 'substituted-bundle.json'
   $Rejected = $false
   try { $null = & $Writer @Arguments } catch { $Rejected = $true }
   if (-not $Rejected) { throw 'Accepted a bundle different from the signed subject' }
-  Write-Host 'PASS: broker envelope, exact signed subject, artifact name and eight substituted bindings.'
+  Write-Host 'PASS: admission-v2 broker envelope, exact signed subject, substituted bindings and native proof boundaries.'
 } finally {
   $ResolvedRoot = [IO.Path]::GetFullPath($Root)
   if (-not $ResolvedRoot.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) {

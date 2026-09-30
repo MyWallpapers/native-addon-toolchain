@@ -46,12 +46,13 @@ $subjectText = [Text.UTF8Encoding]::new($false, $true).GetString(
 $subject = $subjectText | ConvertFrom-Json -Depth 64
 $artifact = (Read-ReleaseArtifactDescriptor $BundleArtifactPath 'bundle').Artifact
 $materials = (Read-ReleaseArtifactDescriptor $MaterialsArtifactPath 'materials').Artifact
-if ($subject.schemaVersion -ne 1 -or $subject.contract -cne 'central-admission-v1' -or
+if ($subject.schemaVersion -ne 2 -or $subject.contract -cne 'central-admission-v2' -or
     $subject.publication.requestId -cne $PublicationRequestId -or
     $subject.publication.attemptId -cne $PublicationAttemptId -or
     $subject.artifact.sha256 -cne $artifact.sha256 -or
     $subject.artifact.sizeBytes -ne $artifact.sizeBytes -or
-    $subject.build.reproducible -cne $true) {
+    $subject.build.reproducible -cne $true -or
+    $subject.build.reproductionScope -cne 'native' -or @($subject.build.replicas).Count -ne 2) {
   throw 'Publication result differs from the verified admission subject'
 }
 if ($materials.sha256 -cne $ExpectedMaterialsDigest -or
