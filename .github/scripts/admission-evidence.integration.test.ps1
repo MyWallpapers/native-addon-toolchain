@@ -75,7 +75,7 @@ try {
   Copy-Item -LiteralPath $primary -Destination $reproduction -Recurse
   $reproductionWeb = [IO.Path]::GetFullPath((Join-Path $reproduction 'web'))
   if (-not $reproductionWeb.StartsWith([IO.Path]::GetFullPath($temporary) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Replica path escapes the test directory' }
-  Remove-Item -LiteralPath $reproductionWeb -Recurse
+  Remove-Item -LiteralPath $reproductionWeb -Recurse -Force
 
   $archive = Join-Path $temporary 'bundle.zip'
   $metadata = Join-Path $temporary 'bundle-metadata'
@@ -262,6 +262,45 @@ try {
   New-Transport $firstMaterials materials $materialsTransportFirst
   New-Transport $secondMaterials materials $materialsTransportSecond
   Assert-TransportIdentical $materialsTransportFirst $materialsTransportSecond 'Materials'
+
+  # Exercise the actual evidence producer through the final broker writer so a
+  # subject-version migration cannot pass isolated fixture tests only.
+  $descriptors = @{}
+  foreach ($kind in @('bundle', 'materials')) {
+    $transport = if ($kind -eq 'bundle') { $bundleTransportFirst } else { $materialsTransportFirst }
+    $artifact = (Get-Content -LiteralPath (Join-Path $transport 'artifact.json') -Raw | ConvertFrom-Json).artifact
+    $descriptor = [ordered]@{
+      name = $artifact.name
+      sizeBytes = $artifact.sizeBytes
+      sha256 = $artifact.sha256
+      parts = @($artifact.parts | ForEach-Object {
+        [ordered]@{id = [string](1000 + $_.index); name = $_.name; sizeBytes = $_.sizeBytes; sha256 = $_.sha256; index = $_.index}
+      })
+    }
+    $descriptorPath = Join-Path $temporary "$kind-descriptor.json"
+    [IO.File]::WriteAllText($descriptorPath, ($descriptor | ConvertTo-Json -Depth 16 -Compress), [Text.UTF8Encoding]::new($false))
+    $descriptors[$kind] = $descriptorPath
+  }
+  $publicationResult = Join-Path $temporary 'publication-result-v1.json'
+  $null = & (Join-Path $PSScriptRoot 'write-publication-result.ps1') `
+    -SubjectPath $summary.subjectPath `
+    -BundleArtifactPath $descriptors.bundle `
+    -MaterialsArtifactPath $descriptors.materials `
+    -ExpectedMaterialsDigest ('sha256:' + (Get-FileHash -LiteralPath $firstMaterials -Algorithm SHA256).Hash.ToLowerInvariant()) `
+    -ExpectedMaterialsSize (Get-Item -LiteralPath $firstMaterials).Length `
+    -PublicationRequestId 019f0000-0000-7000-8000-000000000099 `
+    -PublicationAttemptId 019f0000-0000-7000-8000-000000000100 `
+    -RunId 123456 -RunAttempt 1 `
+    -Publisher @{imageOs = 'ubuntu24'; imageVersion = '20260930.1'; nodeVersion = 'v22.22.3'; pwshVersion = $PSVersionTable.PSVersion.ToString()} `
+    -OutputPath $publicationResult
+  $resultText = [IO.File]::ReadAllText($publicationResult)
+  $signedSubjectText = [IO.File]::ReadAllText($summary.subjectPath)
+  $result = $resultText | ConvertFrom-Json
+  if ($result.subject.schemaVersion -ne 2 -or $result.subject.contract -cne 'central-admission-v2' -or
+      -not $resultText.Contains('"subject":' + $signedSubjectText)) {
+    throw 'Broker writer did not preserve the actual admission-v2 producer output'
+  }
+  Write-Host "PASS: actual admission-v2 producer through the broker result writer (nativeOnly=$NativeOnly)."
 } finally {
   $env:GITHUB_OUTPUT = $originalGithubOutput
   $env:GIT_CONFIG_COUNT = $originalGitConfigCount
