@@ -92,8 +92,8 @@ async function main() {
     },
     sourceDigest: requiredString(options['source-digest'], 'source digest', /^sha256:[0-9a-f]{64}$/u),
     manifestDigest: digest(canonicalJson(manifest)),
-    entry: manifest.entry || manifest.services?.entry
-      ? requiredString(manifest.entry ?? manifest.services.entry, 'manifest entry', /^[A-Za-z0-9._/-]+$/u) : null,
+    ...(manifest.entry != null
+      ? { entry: requiredString(manifest.entry, 'manifest entry', /^[A-Za-z0-9._/-]+$/u) } : {}),
     files,
   }
   const bytes = canonicalJson(index)

@@ -375,7 +375,7 @@ async function main() {
   )
   exactKeys(bundleIndex, [
     'schemaVersion', 'version', 'provenance', 'sourceDigest',
-    'manifestDigest', 'entry', 'files',
+    'manifestDigest', 'files', ...(Object.hasOwn(bundleIndex, 'entry') ? ['entry'] : []),
   ], 'bundle index')
   const provenance = plainRecord(bundleIndex.provenance, 'bundle index provenance')
   if (bundleIndex.schemaVersion !== 1 || provenance.repositoryId !== repositoryId
@@ -397,7 +397,7 @@ async function main() {
   if (digestJson(manifest) !== bundleIndex.manifestDigest) {
     fail('Committed release manifest differs from the bundle index.')
   }
-  if (bundleIndex.entry !== (manifest.entry ?? manifest.services?.entry ?? null)) {
+  if (bundleIndex.entry !== (manifest.entry ?? undefined)) {
     fail('Committed release entry differs from the bundle index.')
   }
   const capabilitySnapshot = {
@@ -458,7 +458,7 @@ async function main() {
   )
   if (sourceTreeBytes.length === 0 || sourceTreeBytes.at(-1) !== 0x0a
     || digestBytes(sourceTreeBytes) !== bundleIndex.sourceDigest) fail('Source tree digest differs from the bundle index.')
-  const nativeOnly = manifest.runtime === 'native-v1' && bundleIndex.entry === null
+  const nativeOnly = manifest.runtime === 'native-v1' && bundleIndex.entry === undefined
     && !manifest.services?.entry
   const lockfiles = await trackedLockfiles(repositoryRoot, commitSha, operationalBudget, nativeOnly)
   const payload = payloadInventory(

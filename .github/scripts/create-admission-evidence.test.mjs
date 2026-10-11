@@ -355,6 +355,60 @@ test('admission-v2 binds one Web build and two independently identical native re
     )
     assert.notEqual(rejected.status, 0)
     assert.match(rejected.stderr, /Replica inventories are not byte-identical/u)
+
+    // Exercise producer -> admission for headless surfaces. The Rust index
+    // omits a missing Canvas entry; a service entry belongs to the manifest.
+    await rm(join(primary, 'web'), { recursive: true })
+    const nativeBytes = Buffer.from('fixture-hook')
+    const nativePayload = [{
+      path: 'native/out/hooks/hook.dll', size: nativeBytes.length,
+      sha256: digest(nativeBytes), mediaType: 'application/vnd.microsoft.portable-executable',
+    }]
+    for (const [runtime, entry] of [['native-v1', undefined], ['native-v1', null], ['service-native-v1', undefined]]) {
+      const headlessManifest = {
+        version: '1.2.3', runtime, settings: [], ...(entry === null ? { entry } : {}),
+        ...(runtime === 'service-native-v1' ? { services: { entry: 'dist/service.js' } } : {}),
+      }
+      await writeFile(join(source, 'manifest.json'), canonicalBytes(headlessManifest))
+      git(source, ['add', 'manifest.json'])
+      git(source, ['-c', 'user.name=Admission fixture', '-c', 'user.email=admission@mywallpaper.invalid',
+        'commit', '-m', `${runtime} ${entry === null ? 'nullable ' : ''}fixture`])
+      const headlessCommit = git(source, ['rev-parse', 'HEAD']).trim().toLowerCase()
+      const payload = [...nativePayload]
+      if (runtime === 'service-native-v1') {
+        const serviceBytes = Buffer.from('export function start() {}')
+        await mkdir(join(primary, 'web', 'dist'), { recursive: true })
+        await writeFile(join(primary, 'web', 'dist', 'service.js'), serviceBytes)
+        payload.unshift({ path: 'dist/service.js', size: serviceBytes.length,
+          sha256: digest(serviceBytes), mediaType: 'text/javascript; charset=utf-8' })
+      }
+      await writeFile(payloadPath, JSON.stringify(payload))
+      const indexResult = spawnSync(process.execPath, [
+        join(toolchainRoot, '.github', 'scripts', 'create-addon-bundle-index.mjs'),
+        '--manifest', join(source, 'manifest.json'), '--inventory', payloadPath,
+        '--repository-id', '123456', '--repository-owner', 'MyWallpapers',
+        '--repository-name', 'admission-fixture', '--commit-sha', headlessCommit,
+        '--source-digest', digest(git(source, ['ls-tree', '-r', '--full-tree', headlessCommit], null)),
+        '--output', bundleIndexPath,
+      ], { encoding: 'utf8' })
+      assert.equal(indexResult.status, 0, indexResult.stderr)
+      const headlessIndex = JSON.parse(await readFile(bundleIndexPath, 'utf8'))
+      assert.equal(Object.hasOwn(headlessIndex, 'entry'), false)
+      const headlessArgs = argumentsFor(join(temporary, `${runtime}${entry === null ? '-nullable' : ''}-evidence`))
+      headlessArgs[headlessArgs.indexOf('--commit-sha') + 1] = headlessCommit
+      const admitted = spawnSync(process.execPath, headlessArgs, { encoding: 'utf8' })
+      assert.equal(admitted.status, 0, admitted.stderr)
+      const headlessSubject = JSON.parse(await readFile(JSON.parse(admitted.stdout).subjectPath, 'utf8'))
+      assert.equal(headlessSubject.build.webOutputInventory.fileCount, runtime === 'native-v1' ? 0 : 1)
+      assert.equal(headlessSubject.release.capabilitySnapshot.runtime, runtime)
+      if (runtime === 'service-native-v1') {
+        assert.equal(headlessSubject.release.capabilitySnapshot.services.entry, 'dist/service.js')
+      }
+      await writeFile(bundleIndexPath, canonicalBytes({ ...headlessIndex, entry: null }))
+      const nullEntry = spawnSync(process.execPath, headlessArgs, { encoding: 'utf8' })
+      assert.notEqual(nullEntry.status, 0)
+      assert.match(nullEntry.stderr, /Committed release entry differs/u)
+    }
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
