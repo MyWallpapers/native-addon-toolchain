@@ -22,8 +22,9 @@ test('bundle indices keep one strict shape for Canvas, native-only and service-o
     }]))
     for (const [manifest, entry] of [
       [{ runtime: 'canvas-v1', version: '1.0.0', entry: 'dist/addon.js' }, 'dist/addon.js'],
-      [{ runtime: 'native-v1', version: '1.0.0' }, null],
-      [{ runtime: 'canvas-v1', version: '1.0.0', services: { entry: 'dist/service.js' } }, 'dist/service.js'],
+      [{ runtime: 'native-v1', version: '1.0.0' }, undefined],
+      [{ runtime: 'service-v1', version: '1.0.0', services: { entry: 'dist/service.js' } }, undefined],
+      [{ runtime: 'canvas-native-v1', version: '1.0.0', entry: 'dist/addon.js', services: { entry: 'dist/service.js' } }, 'dist/addon.js'],
     ]) {
       await writeFile(manifestPath, JSON.stringify(manifest))
       const result = spawnSync(process.execPath, [
@@ -36,9 +37,10 @@ test('bundle indices keep one strict shape for Canvas, native-only and service-o
       const index = JSON.parse(await readFile(outputPath, 'utf8'))
       assert.deepEqual(Object.keys(index).sort(), [
         'schemaVersion', 'version', 'provenance', 'sourceDigest',
-        'manifestDigest', 'entry', 'files',
+        'manifestDigest', 'files', ...(entry === undefined ? [] : ['entry']),
       ].sort())
       assert.equal(index.entry, entry)
+      assert.equal(Object.hasOwn(index, 'entry'), entry !== undefined)
     }
   } finally {
     await rm(root, { recursive: true, force: true })
