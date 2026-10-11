@@ -397,7 +397,7 @@ async function main() {
   if (digestJson(manifest) !== bundleIndex.manifestDigest) {
     fail('Committed release manifest differs from the bundle index.')
   }
-  if (bundleIndex.entry !== manifest.entry) {
+  if (bundleIndex.entry !== (manifest.entry ?? undefined)) {
     fail('Committed release entry differs from the bundle index.')
   }
   const capabilitySnapshot = {

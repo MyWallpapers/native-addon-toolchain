@@ -23,6 +23,7 @@ test('bundle indices keep one strict shape for Canvas, native-only and service-o
     for (const [manifest, entry] of [
       [{ runtime: 'canvas-v1', version: '1.0.0', entry: 'dist/addon.js' }, 'dist/addon.js'],
       [{ runtime: 'native-v1', version: '1.0.0' }, undefined],
+      [{ runtime: 'native-v1', version: '1.0.0', entry: null }, undefined],
       [{ runtime: 'service-v1', version: '1.0.0', services: { entry: 'dist/service.js' } }, undefined],
       [{ runtime: 'canvas-native-v1', version: '1.0.0', entry: 'dist/addon.js', services: { entry: 'dist/service.js' } }, 'dist/addon.js'],
     ]) {

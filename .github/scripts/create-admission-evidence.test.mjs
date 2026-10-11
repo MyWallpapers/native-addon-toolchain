@@ -364,15 +364,15 @@ test('admission-v2 binds one Web build and two independently identical native re
       path: 'native/out/hooks/hook.dll', size: nativeBytes.length,
       sha256: digest(nativeBytes), mediaType: 'application/vnd.microsoft.portable-executable',
     }]
-    for (const runtime of ['native-v1', 'service-native-v1']) {
+    for (const [runtime, entry] of [['native-v1', undefined], ['native-v1', null], ['service-native-v1', undefined]]) {
       const headlessManifest = {
-        version: '1.2.3', runtime, settings: [],
+        version: '1.2.3', runtime, settings: [], ...(entry === null ? { entry } : {}),
         ...(runtime === 'service-native-v1' ? { services: { entry: 'dist/service.js' } } : {}),
       }
       await writeFile(join(source, 'manifest.json'), canonicalBytes(headlessManifest))
       git(source, ['add', 'manifest.json'])
       git(source, ['-c', 'user.name=Admission fixture', '-c', 'user.email=admission@mywallpaper.invalid',
-        'commit', '-m', `${runtime} fixture`])
+        'commit', '-m', `${runtime} ${entry === null ? 'nullable ' : ''}fixture`])
       const headlessCommit = git(source, ['rev-parse', 'HEAD']).trim().toLowerCase()
       const payload = [...nativePayload]
       if (runtime === 'service-native-v1') {
@@ -394,7 +394,7 @@ test('admission-v2 binds one Web build and two independently identical native re
       assert.equal(indexResult.status, 0, indexResult.stderr)
       const headlessIndex = JSON.parse(await readFile(bundleIndexPath, 'utf8'))
       assert.equal(Object.hasOwn(headlessIndex, 'entry'), false)
-      const headlessArgs = argumentsFor(join(temporary, `${runtime}-evidence`))
+      const headlessArgs = argumentsFor(join(temporary, `${runtime}${entry === null ? '-nullable' : ''}-evidence`))
       headlessArgs[headlessArgs.indexOf('--commit-sha') + 1] = headlessCommit
       const admitted = spawnSync(process.execPath, headlessArgs, { encoding: 'utf8' })
       assert.equal(admitted.status, 0, admitted.stderr)
