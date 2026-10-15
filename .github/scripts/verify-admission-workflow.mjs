@@ -234,6 +234,30 @@ for (const [fragment, label] of [
 ]) requireText(runnerObservationCollector, fragment, label)
 
 const build = section(workflow, '  build-untrusted:', '  verify-package:')
+const rustInstallStep = section(
+  build,
+  '      - name: Install pinned Rust MSVC toolchain for native companions',
+  '      - name: Build hooks from a pristine checkout without registry code',
+)
+for (const [fragment, label] of [
+  ["$rustToolchain = '1.94.1-x86_64-pc-windows-msvc'", 'the source-pinned Rust MSVC version'],
+  ['$rustup toolchain install $rustToolchain --profile minimal --no-self-update', 'minimal pinned Rust provisioning'],
+  ['$rustup run $rustToolchain rustc.exe -vV', 'exact rustc version verification'],
+  ["$rustcVersion -notmatch '(?m)^release: 1\\.94\\.1$'", 'rustc release verification'],
+  ["$rustcVersion -notmatch '(?m)^host: x86_64-pc-windows-msvc$'", 'MSVC host verification'],
+  ['$rustup run $rustToolchain cargo.exe -Vv', 'exact cargo version verification'],
+  ["$cargoVersion -notmatch '(?m)^cargo 1\\.94\\.1(?:\\s|$)'", 'cargo release verification'],
+]) requireText(rustInstallStep, fragment, label)
+if (rustInstallStep.includes('uses:') || rustInstallStep.includes('rustup default')
+  || rustInstallStep.includes('MYWALLPAPER_GITHUB_TOKEN')
+  || rustInstallStep.includes('caller-companion') || rustInstallStep.includes('cargo build')) {
+  fail('Rust provisioning must remain trusted, secret-free and separate from caller build execution.')
+}
+const rustInstallerIndex = build.indexOf('      - name: Install pinned Rust MSVC toolchain for native companions')
+if (rustInstallerIndex < 0
+    || rustInstallerIndex >= build.indexOf('      - name: Build hooks from a pristine checkout without registry code')) {
+  fail('Pinned Rust must be provisioned before any caller build command executes.')
+}
 const verifier = section(workflow, '  verify-package:', '  attest-publish:')
 const publisher = section(workflow, '  attest-publish:')
 requireText(

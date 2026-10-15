@@ -184,6 +184,26 @@ jobs:
             -ArtifactRoot toolchain/.github/canonical-cli `
             -Destination "$env:RUNNER_TEMP/mywallpaper-cli"
 
+      - name: Install pinned Rust MSVC toolchain for native companions
+        shell: pwsh
+        run: |
+          $rustToolchain = '1.94.1-x86_64-pc-windows-msvc'
+          $rustup = (Get-Command rustup.exe -CommandType Application -ErrorAction Stop).Source
+          & $rustup toolchain install $rustToolchain --profile minimal --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the declared Rust MSVC toolchain' }
+          $rustcVersion = (& $rustup run $rustToolchain rustc.exe -vV 2>&1 | ForEach-Object { [string]$_ }) -join "`n"
+          $rustcExitCode = $LASTEXITCODE
+          if ($rustcExitCode -ne 0 -or
+              $rustcVersion -notmatch '(?m)^release: 1\.94\.1$' -or
+              $rustcVersion -notmatch '(?m)^host: x86_64-pc-windows-msvc$') {
+            throw 'Installed rustc does not match the declared 1.94.1 MSVC toolchain'
+          }
+          $cargoVersion = (& $rustup run $rustToolchain cargo.exe -Vv 2>&1 | ForEach-Object { [string]$_ }) -join "`n"
+          $cargoExitCode = $LASTEXITCODE
+          if ($cargoExitCode -ne 0 -or $cargoVersion -notmatch '(?m)^cargo 1\.94\.1(?:\s|$)') {
+            throw 'Installed cargo does not match the declared 1.94.1 toolchain'
+          }
+
       - name: Build hooks from a pristine checkout without registry code
         shell: pwsh
         run: |
